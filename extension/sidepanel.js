@@ -5,6 +5,83 @@ const cmdInput = document.getElementById("cmd-input");
 const cmdSend = document.getElementById("cmd-send");
 const cmdResult = document.getElementById("cmd-result");
 
+// --- WebSocket bridge to Python backend ---
+const WS_URL = "ws://localhost:8765";
+let ws = null;
+let wsConnected = false;
+
+function connectWs() {
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+    return;
+  }
+
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    wsConnected = true;
+    updateConnectionStatus();
+  };
+
+  ws.onclose = () => {
+    wsConnected = false;
+    updateConnectionStatus();
+    setTimeout(connectWs, 2000);
+  };
+
+  ws.onerror = () => {
+    wsConnected = false;
+  };
+
+  ws.onmessage = (event) => {
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    const replyId = msg.id;
+
+    function sendReply(result) {
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ id: replyId, result: result }));
+        }
+      } catch {}
+    }
+
+    if (msg.type === "list_elements") {
+      chrome.runtime.sendMessage({ type: "list_elements" }, (response) => {
+        if (chrome.runtime.lastError) {
+          sendReply({ error: "Could not reach page. Try refreshing." });
+          return;
+        }
+        sendReply(response);
+      });
+    }
+
+    if (msg.type === "action") {
+      chrome.runtime.sendMessage(msg, (response) => {
+        if (chrome.runtime.lastError) {
+          sendReply({ error: "Could not reach page. Try refreshing." });
+          return;
+        }
+        sendReply(response);
+      });
+    }
+  };
+}
+
+function updateConnectionStatus() {
+  const el = document.getElementById("ws-status");
+  if (el) {
+    el.textContent = wsConnected ? "Backend: connected" : "Backend: disconnected";
+    el.style.color = wsConnected ? "#8f8" : "#f88";
+  }
+}
+
+connectWs();
+
+// --- List elements button ---
 listBtn.addEventListener("click", () => {
   statusEl.textContent = "Scanning page...";
   elementsEl.innerHTML = "";
@@ -30,6 +107,7 @@ listBtn.addEventListener("click", () => {
   });
 });
 
+// --- Command parser ---
 function parseCommand(text) {
   const parts = text.trim().split(/\s+/);
   const action = parts[0].toLowerCase();
@@ -102,6 +180,7 @@ cmdInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") runCommand();
 });
 
+// --- Render elements list ---
 function renderElements(response) {
   elementsEl.innerHTML = "";
   statusEl.textContent = `Found ${response.count} elements on: ${response.title || "page"}`;
@@ -113,8 +192,12 @@ function renderElements(response) {
   }
 }
 
+// --- Listen for page_ready from content script ---
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "page_ready") {
     renderElements(message);
+    if (ws && wsConnected) {
+      ws.send(JSON.stringify(message));
+    }
   }
 });
