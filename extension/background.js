@@ -1,5 +1,11 @@
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
+chrome.action.onClicked.addListener(async (tab) => {
+  if (tab.url && tab.url.startsWith("chrome://")) {
+    await chrome.tabs.update(tab.id, { url: "https://google.com" });
+  }
+});
+
 async function ensureContentScript(tabId) {
   try {
     await chrome.scripting.executeScript({

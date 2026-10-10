@@ -1,0 +1,111 @@
+"""Tests for agent command parsing and routing (no AWS/Bedrock needed)."""
+
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+
+from agent import try_direct, classify
+
+
+class TestTryDirect:
+    def test_click(self):
+        assert try_direct("click 5") == ("click", 5, None)
+
+    def test_click_case_insensitive(self):
+        assert try_direct("Click 12") == ("click", 12, None)
+
+    def test_click_with_whitespace(self):
+        assert try_direct("  click 3  ") == ("click", 3, None)
+
+    def test_type(self):
+        assert try_direct("type 12 hello world") == ("type", 12, "hello world")
+
+    def test_select(self):
+        assert try_direct("select 5 Missouri") == ("select", 5, "Missouri")
+
+    def test_scroll_down(self):
+        assert try_direct("scroll down") == ("scroll", None, "down")
+
+    def test_scroll_up(self):
+        assert try_direct("scroll up") == ("scroll", None, "up")
+
+    def test_scroll_bare(self):
+        assert try_direct("scroll") == ("scroll", None, "down")
+
+    def test_back(self):
+        assert try_direct("back") == ("back", None, None)
+
+    def test_open(self):
+        assert try_direct("open weather.gov") == ("open", None, "weather.gov")
+
+    def test_list(self):
+        assert try_direct("list") == ("list", None, None)
+
+    def test_not_direct(self):
+        assert try_direct("search for weather") is None
+
+    def test_not_direct_sentence(self):
+        assert try_direct("click the search button") is None
+
+    def test_click_no_number(self):
+        assert try_direct("click") is None
+
+    def test_type_no_value(self):
+        assert try_direct("type 5") is None
+
+    def test_empty(self):
+        assert try_direct("") is None
+
+    def test_new_tab_bare(self):
+        assert try_direct("new tab") == ("new_tab", None, "https://google.com")
+
+    def test_new_tab_shortcut(self):
+        assert try_direct("new tab youtube") == ("new_tab", None, "https://youtube.com")
+
+    def test_new_tab_twitter(self):
+        assert try_direct("new tab twitter") == ("new_tab", None, "https://x.com")
+
+    def test_new_tab_url(self):
+        assert try_direct("new tab weather.gov") == ("new_tab", None, "https://weather.gov")
+
+    def test_new_tab_full_url(self):
+        assert try_direct("new tab https://example.com") == ("new_tab", None, "https://example.com")
+
+    def test_new_tab_unknown_word(self):
+        assert try_direct("new tab something random") is None
+
+    def test_new_tab_case_insensitive(self):
+        assert try_direct("New Tab YouTube") == ("new_tab", None, "https://youtube.com")
+
+
+class TestClassify:
+    def test_direct_click(self):
+        assert classify("click 5") == "direct"
+
+    def test_direct_scroll(self):
+        assert classify("scroll down") == "direct"
+
+    def test_direct_list(self):
+        assert classify("list") == "direct"
+
+    def test_haiku_simple_verb(self):
+        assert classify("click the search button") == "haiku"
+
+    def test_haiku_type_command(self):
+        assert classify("type my name in the box") == "haiku"
+
+    def test_haiku_short(self):
+        assert classify("go back") == "haiku"
+
+    def test_haiku_open(self):
+        assert classify("open the weather website") == "haiku"
+
+    def test_sonnet_complex(self):
+        assert classify("search for weather in Kansas City and tell me the forecast") == "sonnet"
+
+    def test_sonnet_multi_step(self):
+        assert classify("fill out the benefits form with my information and submit it") == "sonnet"
+
+    def test_sonnet_form(self):
+        assert classify("I need to check what disability benefits I might qualify for") == "sonnet"

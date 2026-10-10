@@ -49,6 +49,15 @@ function connectWs() {
       } catch {}
     }
 
+    if (msg.type === "new_tab") {
+      let url = msg.url || "https://google.com";
+      if (!url.startsWith("http")) url = "https://" + url;
+      chrome.tabs.create({ url: url }, () => {
+        sendReply({ success: true, url: url });
+      });
+      return;
+    }
+
     if (msg.type === "list_elements") {
       chrome.runtime.sendMessage({ type: "list_elements" }, (response) => {
         if (chrome.runtime.lastError) {

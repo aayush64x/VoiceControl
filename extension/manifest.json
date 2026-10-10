@@ -3,7 +3,7 @@
   "name": "Voice Browser Agent",
   "version": "0.1",
   "description": "Voice-controlled browser agent for accessibility",
-  "permissions": ["activeTab", "sidePanel", "scripting"],
+  "permissions": ["activeTab", "sidePanel", "scripting", "tabs"],
   "side_panel": {
     "default_path": "sidepanel.html"
   },

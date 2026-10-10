@@ -1,0 +1,375 @@
+"""Strands agent that drives the browser through the WebSocket bridge.
+
+Three tiers:
+  1. Direct commands (no AI): "click 5", "scroll down", "open weather.gov"
+  2. Haiku (simple one-step): "click the search button", "type my name"
+  3. Sonnet (multi-step): "search for weather in Kansas City", "fill out this form"
+"""
+
+import asyncio
+import json
+import os
+import re
+import time
+
+from dotenv import load_dotenv
+from strands import Agent, tool
+from strands.models import BedrockModel
+
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+import server
+
+_server_loop = None
+
+
+# ---------------------------------------------------------------------------
+# Tier 1: direct command parser — no model call
+# ---------------------------------------------------------------------------
+
+_DIRECT_PATTERNS = [
+    (r"^click\s+(\d+)$", lambda m: ("click", int(m.group(1)), None)),
+    (r"^type\s+(\d+)\s+(.+)$", lambda m: ("type", int(m.group(1)), m.group(2))),
+    (r"^select\s+(\d+)\s+(.+)$", lambda m: ("select", int(m.group(1)), m.group(2))),
+    (r"^scroll\s+(up|down)$", lambda m: ("scroll", None, m.group(1))),
+    (r"^scroll$", lambda m: ("scroll", None, "down")),
+    (r"^back$", lambda m: ("back", None, None)),
+    (r"^open\s+(https?://\S+|[\w.-]+\.\w{2,})$", lambda m: ("open", None, m.group(1))),
+    (r"^list$", lambda m: ("list", None, None)),
+]
+
+_TAB_SHORTCUTS = {
+    "youtube": "https://youtube.com",
+    "twitter": "https://x.com",
+    "google": "https://google.com",
+    "gmail": "https://gmail.com",
+    "wikipedia": "https://wikipedia.org",
+    "reddit": "https://reddit.com",
+    "instagram": "https://instagram.com",
+    "facebook": "https://facebook.com",
+    "amazon": "https://amazon.com",
+    "linkedin": "https://linkedin.com",
+    "tiktok": "https://tiktok.com",
+    "netflix": "https://netflix.com",
+}
+
+
+def try_direct(text):
+    stripped = text.strip()
+
+    # "new tab" commands
+    m = re.match(r"^new\s+tab(?:\s+(.+))?$", stripped, re.IGNORECASE)
+    if m:
+        target = (m.group(1) or "").strip().lower()
+        if not target:
+            return ("new_tab", None, "https://google.com")
+        if target in _TAB_SHORTCUTS:
+            return ("new_tab", None, _TAB_SHORTCUTS[target])
+        if re.match(r"^(https?://\S+|[\w.-]+\.\w{2,})$", target):
+            url = target if target.startswith("http") else "https://" + target
+            return ("new_tab", None, url)
+        return None
+
+    for pattern, extract in _DIRECT_PATTERNS:
+        m = re.match(pattern, stripped, re.IGNORECASE)
+        if m:
+            return extract(m)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# bridge helper — call async server funcs from sync agent-tool thread
+# ---------------------------------------------------------------------------
+
+def _bridge(coro, timeout=15):
+    if _server_loop is None:
+        return {"error": "Server not started."}
+    fut = asyncio.run_coroutine_threadsafe(coro, _server_loop)
+    try:
+        return fut.result(timeout=timeout)
+    except TimeoutError:
+        return {"error": "Timed out waiting for browser response."}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Strands tools
+# ---------------------------------------------------------------------------
+
+@tool
+def read_page() -> str:
+    """Read the current web page. Returns the page title and a numbered list of all interactive elements.
+
+    Always call this before acting so you know the current element numbers.
+    Call again after any navigation because numbers change on new pages.
+    """
+    result = _bridge(server.list_elements())
+    if not result or "error" in result:
+        err = result.get("error", "unknown") if result else "no response"
+        return f"Error reading page: {err}"
+
+    lines = [f"Page: {result.get('title', 'Unknown')} — {result['count']} elements"]
+    for el in result.get("elements", []):
+        line = f"  {el['num']}: [{el['type']}] {el['label']}"
+        if el.get("value"):
+            line += f" = {el['value']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+@tool
+def act(action: str, element: int = 0, value: str = "") -> str:
+    """Perform one action on the page.
+
+    Args:
+        action: click, type, select, scroll, back, open, read, press_key
+        element: Element number from read_page (required for click/type/select)
+        value: Text to type, option to select, scroll direction, URL to open, or key name
+
+    Examples:
+        act("click", 7)                            — click element 7
+        act("type", 12, "Kansas City")              — type into field 12
+        act("select", 5, "Missouri")                — choose dropdown option
+        act("scroll", 0, "down")                    — scroll page down
+        act("back")                                 — go back
+        act("open", 0, "https://weather.gov")       — navigate to URL
+    """
+    elem = element if element > 0 else None
+    val = value if value else None
+    result = _bridge(server.do_action(action, element=elem, value=val))
+
+    if not result:
+        return "Error: no response from browser."
+    if result.get("error"):
+        return f"Error: {result['error']}"
+
+    parts = [f"Done: {result.get('action', action)}"]
+    if result.get("label"):
+        parts.append(f"on '{result['label']}'")
+    if result.get("navigated"):
+        parts.append("— page navigated, call read_page to see the new page")
+    return " ".join(parts)
+
+
+@tool
+def fill_form(fields: list[dict]) -> str:
+    """Fill multiple form fields in one call. Faster than calling act for each field.
+
+    Args:
+        fields: List of dicts, each with:
+            element (int): element number from read_page
+            value (str): text to type or option to select
+            action (str): "type", "select", or "click" — defaults to "type"
+
+    Example:
+        fill_form([
+            {"element": 12, "value": "John Smith"},
+            {"element": 13, "value": "john@email.com"},
+            {"element": 14, "value": "Kansas City", "action": "select"},
+            {"element": 15, "action": "click"}
+        ])
+    """
+    if not fields:
+        return "Error: no fields provided."
+
+    ok_count = 0
+    fail_count = 0
+    lines = []
+
+    for i, field in enumerate(fields, 1):
+        elem = field.get("element")
+        if elem is None:
+            lines.append(f"  {i}. SKIP — no element number")
+            fail_count += 1
+            continue
+
+        val = field.get("value")
+        fa = field.get("action", "type")
+        if fa in ("checkbox", "radio"):
+            fa = "click"
+
+        result = _bridge(server.do_action(fa, element=elem, value=val))
+
+        if not result or result.get("error"):
+            err = result.get("error", "no response") if result else "no response"
+            lines.append(f"  {i}. element {elem}: FAIL — {err}")
+            fail_count += 1
+        else:
+            label = result.get("label", f"element {elem}")
+            lines.append(f"  {i}. {label}: OK")
+            ok_count += 1
+
+    summary = f"Filled {ok_count}/{ok_count + fail_count} fields."
+    if fail_count:
+        summary += f" {fail_count} failed — read_page and check element numbers."
+    return summary + "\n" + "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Agent setup
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = """\
+You are a browser assistant controlled by voice. You help users interact with \
+web pages using natural language commands.
+
+Workflow:
+1. Call read_page to see the current page
+2. Find the right element by number and label
+3. Use act or fill_form to interact
+4. After navigation, call read_page again (numbers change on new pages)
+
+Rules:
+- ALWAYS read_page before your first action
+- Use element numbers from the LATEST read_page only
+- For search: type the query, then click the submit/search/go button
+- For forms with many fields, use fill_form
+- If an action fails, read_page and try a different approach
+- Be concise: say what you did and the result, nothing else
+- Never guess element numbers — read_page first
+"""
+
+_agents = {}
+
+
+def _get_agent(tier):
+    if tier not in _agents:
+        if tier == "haiku":
+            model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        else:
+            model_id = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        _agents[tier] = Agent(
+            model=BedrockModel(model_id=model_id, region_name="us-east-1"),
+            system_prompt=_SYSTEM_PROMPT,
+            tools=[read_page, act, fill_form],
+        )
+    return _agents[tier]
+
+
+# ---------------------------------------------------------------------------
+# Request classifier
+# ---------------------------------------------------------------------------
+
+_SIMPLE_STARTS = (
+    "click", "tap", "press", "hit",
+    "type", "enter", "write", "input",
+    "scroll", "go back", "back", "open", "navigate", "go to",
+    "read", "check", "select",
+)
+
+
+def classify(text):
+    if try_direct(text) is not None:
+        return "direct"
+    lower = text.strip().lower()
+    for s in _SIMPLE_STARTS:
+        if lower.startswith(s):
+            return "haiku"
+    if len(lower.split()) <= 4:
+        return "haiku"
+    return "sonnet"
+
+
+# ---------------------------------------------------------------------------
+# Input processing
+# ---------------------------------------------------------------------------
+
+async def _run_direct(text):
+    action, element, value = try_direct(text)
+    if action == "list":
+        result = await server.list_elements()
+        if result and "elements" in result:
+            lines = [f"Found {result['count']} elements:"]
+            for el in result["elements"]:
+                line = f"  {el['num']}: {el['label']} ({el['type']})"
+                if el.get("value"):
+                    line += f" [{el['value']}]"
+                lines.append(line)
+            return "\n".join(lines)
+        return f"Error: {result}"
+    if action == "new_tab":
+        result = await server.send_command("new_tab", url=value)
+        if result and result.get("success"):
+            return f"Opened new tab: {value}"
+        return f"Error: {result}"
+    result = await server.do_action(action, element=element, value=value)
+    if result and result.get("success"):
+        return f"OK: {json.dumps(result)}"
+    return f"Error: {result}"
+
+
+def _run_agent(text, tier):
+    agent = _get_agent(tier)
+    response = agent(text)
+    return str(response)
+
+
+async def process_input(text):
+    tier = classify(text)
+    if tier == "direct":
+        print("[tier 1] Direct command — no model call")
+        return await _run_direct(text)
+
+    label = "Haiku" if tier == "haiku" else "Sonnet"
+    print(f"[tier {'2' if tier == 'haiku' else '3'}] Using {label}")
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _run_agent, text, tier)
+
+
+# ---------------------------------------------------------------------------
+# Chat loop + main
+# ---------------------------------------------------------------------------
+
+async def chat_loop():
+    print("\n[agent] Ready. Type a command or natural language instruction.")
+    print("[agent] Direct: click 5 | type 12 hello | scroll down | open weather.gov")
+    print("[agent] Natural: 'search for weather in Kansas City'")
+    print("[agent] Type 'quit' to exit.\n")
+
+    loop = asyncio.get_running_loop()
+
+    while True:
+        try:
+            text = await loop.run_in_executor(None, lambda: input("you> "))
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        text = text.strip()
+        if not text:
+            continue
+        if text.lower() in ("quit", "exit"):
+            break
+
+        start = time.time()
+        try:
+            result = await process_input(text)
+        except Exception as exc:
+            result = f"Error: {exc}"
+        elapsed = time.time() - start
+
+        print(f"\nagent> {result}")
+        print(f"[{elapsed:.1f}s]")
+        print()
+
+
+async def main():
+    global _server_loop
+    _server_loop = asyncio.get_running_loop()
+
+    import websockets as _ws
+
+    print(f"[bridge] Starting on ws://localhost:{server.PORT}")
+    try:
+        async with _ws.serve(server.handler, "localhost", server.PORT):
+            await chat_loop()
+    except OSError as e:
+        if "address already in use" in str(e).lower():
+            print(f"[bridge] Port {server.PORT} already in use. Stop the other server first.")
+        else:
+            raise
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
