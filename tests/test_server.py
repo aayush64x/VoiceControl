@@ -18,6 +18,7 @@ def reset_server_state():
     server.client = None
     server.pending = {}
     server.request_id = 0
+    server.last_page = None
     yield
 
 

@@ -109,3 +109,12 @@ class TestClassify:
 
     def test_sonnet_form(self):
         assert classify("I need to check what disability benefits I might qualify for") == "sonnet"
+
+    def test_sonnet_and_keyword(self):
+        assert classify("open usa.gov and check what disability I qualify for") == "sonnet"
+
+    def test_sonnet_question_mark(self):
+        assert classify("what disability benefits do I qualify for?") == "sonnet"
+
+    def test_haiku_still_works(self):
+        assert classify("click the search button") == "haiku"

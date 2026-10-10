@@ -97,6 +97,17 @@ def _bridge(coro, timeout=15):
 # Strands tools
 # ---------------------------------------------------------------------------
 
+def _format_page(result):
+    """Format page data into a string for the agent."""
+    lines = [f"Page: {result.get('title', 'Unknown')} — {result.get('count', 0)} elements"]
+    for el in result.get("elements", []):
+        line = f"  {el['num']}: [{el['type']}] {el['label']}"
+        if el.get("value"):
+            line += f" = {el['value']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 @tool
 def read_page() -> str:
     """Read the current web page. Returns the page title and a numbered list of all interactive elements.
@@ -106,16 +117,11 @@ def read_page() -> str:
     """
     result = _bridge(server.list_elements())
     if not result or "error" in result:
+        if server.last_page and server.last_page.get("elements"):
+            return _format_page(server.last_page)
         err = result.get("error", "unknown") if result else "no response"
         return f"Error reading page: {err}"
-
-    lines = [f"Page: {result.get('title', 'Unknown')} — {result['count']} elements"]
-    for el in result.get("elements", []):
-        line = f"  {el['num']}: [{el['type']}] {el['label']}"
-        if el.get("value"):
-            line += f" = {el['value']}"
-        lines.append(line)
-    return "\n".join(lines)
+    return _format_page(result)
 
 
 @tool
@@ -211,23 +217,32 @@ def fill_form(fields: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
-You are a browser assistant controlled by voice. You help users interact with \
-web pages using natural language commands.
+You are a browser controller. You convert user commands into browser actions. \
+You NEVER answer from your own knowledge. You ONLY use tools.
 
 Workflow:
-1. Call read_page to see the current page
-2. Find the right element by number and label
-3. Use act or fill_form to interact
-4. After navigation, call read_page again (numbers change on new pages)
+1. read_page to see the current page
+2. Act on elements by number
+3. read_page again only after navigation
 
-Rules:
-- ALWAYS read_page before your first action
-- Use element numbers from the LATEST read_page only
-- For search: type the query, then click the submit/search/go button
-- For forms with many fields, use fill_form
-- If an action fails, read_page and try a different approach
-- Be concise: say what you did and the result, nothing else
-- Never guess element numbers — read_page first
+Efficiency rules:
+- Take the SHORTEST path. Use search boxes instead of browsing menus.
+- Combine multiple field fills into one fill_form call.
+- Do NOT read_page after every action — only after navigation to a new page.
+- Do NOT go back and retry more than once. If stuck, say so and stop.
+- Maximum 10 tool calls per task. If not done by then, report progress and stop.
+
+Action rules:
+- ALWAYS read_page before your first action.
+- Use element numbers from the LATEST read_page only.
+- For search: type the query, then click submit. Two actions, not five.
+- If act("open", url) fails, go to google.com and search for it.
+
+Output rules:
+- NEVER answer from your own knowledge. You are not a chatbot.
+- NEVER give advice, lists, or information the user didn't ask for.
+- Report ONLY what you did: "Opened usa.gov. Clicked Benefits. Found 3 results."
+- If you cannot complete the task, say what you tried and stop.
 """
 
 _agents = {}
@@ -263,6 +278,8 @@ def classify(text):
     if try_direct(text) is not None:
         return "direct"
     lower = text.strip().lower()
+    if " and " in lower or "?" in lower:
+        return "sonnet"
     for s in _SIMPLE_STARTS:
         if lower.startswith(s):
             return "haiku"
@@ -301,7 +318,11 @@ async def _run_direct(text):
 
 def _run_agent(text, tier):
     agent = _get_agent(tier)
-    response = agent(text)
+    prompt = text
+    if server.last_page and server.last_page.get("elements"):
+        page_context = _format_page(server.last_page)
+        prompt = f"{text}\n\n[Current page already loaded — no need to call read_page]\n{page_context}"
+    response = agent(prompt)
     return str(response)
 
 

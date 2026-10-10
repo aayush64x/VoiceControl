@@ -10,6 +10,7 @@ PORT = 8765
 client = None
 pending = {}
 request_id = 0
+last_page = None
 
 
 async def handler(websocket):
@@ -26,6 +27,8 @@ async def handler(websocket):
             if msg.get("id") in pending:
                 pending[msg["id"]].set_result(msg.get("result"))
             elif msg.get("type") == "page_ready":
+                global last_page
+                last_page = msg
                 print(f"[bridge] Page ready: {msg.get('title', '?')} ({msg.get('count', 0)} elements)")
     except websockets.ConnectionClosed:
         print("[bridge] Extension disconnected")

@@ -69,6 +69,19 @@ function connectWs() {
     }
 
     if (msg.type === "action") {
+      if (msg.action === "open" && msg.value) {
+        let url = msg.value;
+        if (!url.startsWith("http")) url = "https://" + url;
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (tabs[0]) {
+            chrome.tabs.update(tabs[0].id, { url: url });
+            sendReply({ success: true, action: "open", url: url, navigated: true });
+          } else {
+            sendReply({ error: "No active tab." });
+          }
+        });
+        return;
+      }
       chrome.runtime.sendMessage(msg, (response) => {
         if (chrome.runtime.lastError) {
           sendReply({ error: "Could not reach page. Try refreshing." });

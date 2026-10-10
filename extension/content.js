@@ -208,6 +208,7 @@ function doAction(action, element, value) {
 
   if (action === "open") {
     if (!value) return { success: false, error: "No URL provided." };
+    if (!value.startsWith("http")) value = "https://" + value;
     window.location.href = value;
     return { success: true, action: "open", url: value };
   }
