@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Voice Agent</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 16px;
+      min-width: 300px;
+    }
+    h1 {
+      font-size: 18px;
+      margin-bottom: 16px;
+      color: #ffffff;
+    }
+    #list-btn {
+      width: 100%;
+      padding: 12px;
+      font-size: 15px;
+      background: #ff6600;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #list-btn:hover { background: #e65c00; }
+    #list-btn:active { background: #cc5200; }
+    #status {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #aaa;
+    }
+    #elements {
+      margin-top: 16px;
+      font-size: 13px;
+      line-height: 1.6;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    .el-item {
+      padding: 4px 0;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    .el-num {
+      color: #ff6600;
+      font-weight: bold;
+      font-family: monospace;
+      margin-right: 6px;
+    }
+    .el-type {
+      color: #888;
+      font-size: 11px;
+      margin-left: 4px;
+    }
+    .el-value {
+      color: #6a9fff;
+      font-size: 11px;
+    }
+    #cmd-box {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    #cmd-input {
+      flex: 1;
+      padding: 10px;
+      font-size: 14px;
+      background: #2a2a4a;
+      color: #e0e0e0;
+      border: 1px solid #444;
+      border-radius: 6px;
+      outline: none;
+    }
+    #cmd-input:focus { border-color: #ff6600; }
+    #cmd-input::placeholder { color: #666; }
+    #cmd-send {
+      padding: 10px 16px;
+      font-size: 14px;
+      background: #ff6600;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #cmd-send:hover { background: #e65c00; }
+    #cmd-result {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #8f8;
+      font-family: monospace;
+      white-space: pre-wrap;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+    #cmd-result.error { color: #f88; }
+    .help-text {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <h1>Voice Browser Agent</h1>
+  <button id="list-btn">List Elements</button>
+  <div id="cmd-box">
+    <input id="cmd-input" type="text" placeholder="click 7, type 3 hello, scroll down">
+    <button id="cmd-send">Go</button>
+  </div>
+  <div class="help-text">click N · type N text · select N value · scroll up/down · back · open URL</div>
+  <div id="cmd-result"></div>
+  <div id="status"></div>
+  <div id="elements"></div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
