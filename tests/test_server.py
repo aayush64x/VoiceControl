@@ -610,8 +610,15 @@ def test_wants_speech_only_when_asked():
     assert server.wants_speech("read it out loud for me")
     assert server.wants_speech("read this to me")
     assert server.wants_speech("read the article aloud")
+    assert server.wants_speech("read me the answer")
+    assert server.wants_speech("read the page")
+    assert server.wants_speech("read that again")
+    assert server.wants_speech("can you read the article")
+    assert server.wants_speech("speak the answer")
+    assert server.wants_speech("Read it.")
     assert not server.wants_speech("weather in Kansas City")
-    assert not server.wants_speech("read the page")
+    assert not server.wants_speech("open my reading list")
+    assert not server.wants_speech("click 5")
 
 
 @pytest.mark.asyncio

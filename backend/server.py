@@ -93,8 +93,7 @@ def localized(key):
 
 
 _SPEECH_REQUEST = re.compile(
-    r"\b(out loud|aloud|read (it|this|that|them)?\s*(to me|for me)|read (it|this|that) (out|to|for)|"
-    r"tell me out loud|say it|speak it)\b"
+    r"\b(out loud|aloud|read|speak|say it)\b"   # "read me the answer", "read the page", "speak it"
     r"|en voz alta|l[eé]e(lo|melo|me)\b"   # Spanish: "léelo en voz alta"
     r"|소리 ?내어|읽어 ?줘|읽어 ?주세요",     # Korean: "읽어줘"
     re.IGNORECASE,
@@ -102,7 +101,7 @@ _SPEECH_REQUEST = re.compile(
 
 
 def wants_speech(text):
-    """Replies are spoken only when the user asked: "read it out loud", "read this to me"."""
+    """Replies are spoken only when the user asked: any "read" or "speak", or "out loud"."""
     return bool(_SPEECH_REQUEST.search(text or ""))
 
 
