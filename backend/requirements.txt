@@ -1,8 +1,11 @@
-strands-agents
+strands-agents>=1.59
 strands-agents-tools
 boto3
-websockets
+websockets>=14
 python-dotenv
 SpeechRecognition
 sounddevice
 numpy
+# Python 3.13 removed aifc/audioop, which SpeechRecognition imports
+standard-aifc; python_version >= "3.13"
+audioop-lts; python_version >= "3.13"
