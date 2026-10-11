@@ -424,7 +424,7 @@ function doAction(action, element, value, submit = false) {
 
   if (action === "back") {
     window.history.back();
-    return { success: true, action: "back" };
+    return { success: true, action: "back", navigated: true };
   }
 
   if (action === "open") {
@@ -451,7 +451,7 @@ function doAction(action, element, value, submit = false) {
   scrollToElement(el);
 
   if (action === "click") {
-    const willNavigate = el.tagName === "A" && el.href && !el.href.startsWith("javascript:");
+    const willNavigate = linkWillNavigate(el);
     el.focus();
     el.click();
     if (el.type === "checkbox" || el.type === "radio") {
@@ -523,8 +523,77 @@ function doAction(action, element, value, submit = false) {
   return { success: false, error: `Unknown action: "${action}". Valid: click, type, select, scroll, back, open, read, press_key.` };
 }
 
+// --- Waiting for the page to settle ---
+// After a click or typing, pages update in place (next question, error message,
+// suggestions). Wait until the DOM has been quiet for quietMs (max maxMs) before
+// replying, so the agent never reads the page mid-update.
+function isOverlayMutation(m) {
+  const t = m.target;
+  return t.id === "voice-agent-overlays" || (t.closest && t.closest("#voice-agent-overlays"));
+}
+
+function waitForSettle({ quietMs = 400, maxMs = 3000 } = {}) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    let changed = false;
+    let quietTimer = null;
+    let maxTimer = null;
+    let observer = null;
+    const done = () => {
+      if (observer) observer.disconnect();
+      clearTimeout(quietTimer);
+      clearTimeout(maxTimer);
+      resolve({ changed, ms: Date.now() - start });
+    };
+    if (typeof MutationObserver === "undefined") {
+      setTimeout(done, quietMs);
+      return;
+    }
+    observer = new MutationObserver((mutations) => {
+      if (mutations.every(isOverlayMutation)) return;
+      changed = true;
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(done, quietMs);
+    });
+    // style is left out on purpose: animations change it constantly
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["class", "hidden", "aria-hidden", "aria-expanded", "aria-checked", "aria-selected", "aria-invalid", "disabled", "value"],
+    });
+    quietTimer = setTimeout(done, quietMs);
+    maxTimer = setTimeout(done, maxMs);
+  });
+}
+
+// Would clicking this link load a different page? (Not for #anchors on this page.)
+function linkWillNavigate(el) {
+  if (el.tagName !== "A" || !el.href || el.href.startsWith("javascript:") || el.hasAttribute("download")) return false;
+  try {
+    const url = new URL(el.href, location.href);
+    const here = new URL(location.href);
+    const samePage = url.origin === here.origin && url.pathname === here.pathname && url.search === here.search;
+    return !(samePage && url.hash);
+  } catch (e) {
+    return true;
+  }
+}
+
+function sendToExtension(message) {
+  if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) return;
+  try {
+    chrome.runtime.sendMessage(message).catch(() => {});
+  } catch (e) {
+    // Extension was reloaded or the side panel isn't open — nothing to tell
+  }
+}
+
 // --- Fix 6: New page announces itself ---
 function announceReady() {
+  // Background tabs loading must not look like "the page you're on changed"
+  if (document.visibilityState === "hidden") return;
   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
     try {
       const elements = listElements();
@@ -584,18 +653,37 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage 
       if (skipRescan) {
         sendResponse(result);
       } else {
-        setTimeout(() => {
+        waitForSettle().then(({ changed, ms }) => {
           const updated = listElements();
           showOverlays();
           result.updatedElements = updated.length;
+          result.changed = changed;
+          result.settleMs = ms;
           sendResponse(result);
-        }, 300);
+        });
       }
       return true;
     }
   });
 
   announceReady();
+
+  // Single-page apps (YouTube, Gmail, React sites) change the address without
+  // loading a new page, so this script never re-runs. Watch the address and
+  // announce the "new page" once it has settled.
+  let lastUrl = location.href;
+  setInterval(() => {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    if (document.visibilityState === "hidden") return;
+    sendToExtension({ type: "page_loading", url: location.href });
+    waitForSettle({ quietMs: 500, maxMs: 4000 }).then(announceReady);
+  }, 400);
+
+  // Switching to this tab makes it "the page you're on"
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") announceReady();
+  });
 }
 
 function resetForTest() {
@@ -605,5 +693,5 @@ function resetForTest() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
+  module.exports = { waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
 }

@@ -823,3 +823,58 @@ describe("real-world forms", () => {
     expect(getPageContext().errors).toEqual([]);
   });
 });
+
+describe("waiting for the page (navigation and in-place updates)", () => {
+  const { waitForSettle, linkWillNavigate } = content;
+
+  test("waitForSettle resolves after the page goes quiet and reports a change", async () => {
+    setTimeout(() => document.body.appendChild(document.createElement("p")), 20);
+    const { changed, ms } = await waitForSettle({ quietMs: 80, maxMs: 1000 });
+    expect(changed).toBe(true);
+    expect(ms).toBeGreaterThanOrEqual(80);
+    expect(ms).toBeLessThan(1000);
+  });
+
+  test("waitForSettle reports no change when nothing happens", async () => {
+    const { changed } = await waitForSettle({ quietMs: 50, maxMs: 500 });
+    expect(changed).toBe(false);
+  });
+
+  test("waitForSettle gives up at maxMs on a page that never stops changing", async () => {
+    const timer = setInterval(() => document.body.appendChild(document.createElement("span")), 10);
+    const { changed, ms } = await waitForSettle({ quietMs: 100, maxMs: 300 });
+    clearInterval(timer);
+    expect(changed).toBe(true);
+    expect(ms).toBeGreaterThanOrEqual(290);
+    expect(ms).toBeLessThan(600);
+  });
+
+  test("waitForSettle ignores our own number tags", async () => {
+    content.showOverlays(); // creates the overlay container
+    setTimeout(() => {
+      document.getElementById("voice-agent-overlays").appendChild(document.createElement("div"));
+    }, 10);
+    const { changed } = await waitForSettle({ quietMs: 60, maxMs: 500 });
+    expect(changed).toBe(false);
+  });
+
+  test("linkWillNavigate: real links yes; same-page anchors, javascript: and downloads no", () => {
+    const link = (href, attrs = {}) => {
+      const a = document.createElement("a");
+      a.href = href;
+      for (const [k, v] of Object.entries(attrs)) a.setAttribute(k, v);
+      return a;
+    };
+    expect(linkWillNavigate(link("https://example.com/other"))).toBe(true);
+    expect(linkWillNavigate(link("/next-page"))).toBe(true);
+    expect(linkWillNavigate(link(location.href.split("#")[0] + "#section"))).toBe(false);
+    expect(linkWillNavigate(link("javascript:void(0)"))).toBe(false);
+    expect(linkWillNavigate(link("/file.pdf", { download: "" }))).toBe(false);
+    expect(linkWillNavigate(document.createElement("button"))).toBe(false);
+  });
+
+  test("back reports navigation so the backend waits for the previous page", () => {
+    window.history.back = jest.fn();
+    expect(doAction("back").navigated).toBe(true);
+  });
+});

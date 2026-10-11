@@ -292,3 +292,20 @@ class TestStepStream:
         agent, sent = self._capture(monkeypatch)
         agent._on_after_tool(self._after("ask_user", agent._CANCELLED_ANSWER))
         assert sent[0]["status"] == "cancelled"
+
+
+class TestLocationPrefix:
+    def test_prefixes_title_and_url_only(self):
+        import server
+        from agent import _with_location
+        server.last_page = {"title": "National Weather Service", "url": "https://www.weather.gov/",
+                            "elements": [{"num": 1}]}
+        out = _with_location("weather in Kansas City")
+        assert out == "[You are on: National Weather Service — https://www.weather.gov/]\nweather in Kansas City"
+        server.last_page = None
+
+    def test_no_page_known(self):
+        import server
+        from agent import _with_location
+        server.last_page = None
+        assert _with_location("hello") == "hello"

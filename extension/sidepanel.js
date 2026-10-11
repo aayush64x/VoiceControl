@@ -141,7 +141,7 @@ function connectWs() {
     if (msg.type === "list_elements") {
       chrome.runtime.sendMessage({ type: "list_elements" }, (response) => {
         if (chrome.runtime.lastError) {
-          sendReply({ error: "Could not reach page. Try refreshing." });
+          sendReply({ error: "Could not reach this page. It may still be loading, or it is a browser page the extension can't control." });
           return;
         }
         sendReply(response);
@@ -164,7 +164,7 @@ function connectWs() {
       }
       chrome.runtime.sendMessage(msg, (response) => {
         if (chrome.runtime.lastError) {
-          sendReply({ error: "Could not reach page. Try refreshing." });
+          sendReply({ error: "Could not reach this page. It may still be loading, or it is a browser page the extension can't control." });
           return;
         }
         sendReply(response);
@@ -516,6 +516,10 @@ function showQuestion(question, yesNo, callback) {
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "toggle_mic") {
     toggleMic();
+    return;
+  }
+  if (message.type === "page_loading") {
+    if (ws && wsConnected) ws.send(JSON.stringify(message));
     return;
   }
   if (message.type === "page_ready") {

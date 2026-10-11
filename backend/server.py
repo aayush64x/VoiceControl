@@ -21,6 +21,14 @@ pending = {}
 request_id = 0
 last_page = None
 
+# Page-load tracking: bumped by "page_loading" (a tab started loading) and
+# "page_ready" (a page finished loading or a single-page app changed route).
+# Actions that navigate wait on these so the agent never reads the old page.
+_page_loading_count = 0
+_page_ready_count = 0
+NAV_START_WAIT = 1.5  # seconds to see any sign of navigation before assuming none happened
+NAV_LOAD_WAIT = 8.0   # seconds to wait for the new page once it started loading
+
 on_user_input = None
 on_cancel = None  # set by agent.py — stops the running agent task
 _transcriber = None
@@ -129,7 +137,7 @@ async def enqueue_command(text):
 
 
 async def handler(websocket):
-    global client, _transcriber, last_page
+    global client, _transcriber, last_page, _page_loading_count, _page_ready_count
     client = websocket
     print("[bridge] Extension connected")
     try:
@@ -188,8 +196,12 @@ async def handler(websocket):
 
             if msg.get("id") in pending:
                 pending[msg["id"]].set_result(msg.get("result"))
+            elif msg_type == "page_loading":
+                _page_loading_count += 1
+                print(f"[bridge] Page loading: {msg.get('url', '?')}")
             elif msg_type == "page_ready":
                 last_page = msg
+                _page_ready_count += 1
                 print(f"[bridge] Page ready: {msg.get('title', '?')} ({msg.get('count', 0)} elements)")
     except websockets.ConnectionClosed:
         pass
@@ -259,6 +271,29 @@ async def ask_user(question, yes_no=False):
         _question_rid = None
 
 
+async def wait_for_page(ready_before, loading_before):
+    """After an action that may navigate, wait until the new page has loaded.
+
+    Returns "loaded", "no_navigation" (nothing happened within NAV_START_WAIT —
+    e.g. a link that only scrolls or opens a menu), or "slow" (the page started
+    loading but didn't finish within NAV_LOAD_WAIT).
+    """
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    started = False
+    while True:
+        if _page_ready_count > ready_before:
+            return "loaded"
+        if _page_loading_count > loading_before:
+            started = True
+        elapsed = loop.time() - start
+        if not started and elapsed >= NAV_START_WAIT:
+            return "no_navigation"
+        if elapsed >= NAV_LOAD_WAIT:
+            return "slow"
+        await asyncio.sleep(0.05)
+
+
 async def do_action(action, element=None, value=None, submit=False):
     kwargs = {"action": action}
     if element is not None:
@@ -267,7 +302,17 @@ async def do_action(action, element=None, value=None, submit=False):
         kwargs["value"] = value
     if submit:
         kwargs["submit"] = True
-    return await send_command("action", **kwargs)
+    ready_before, loading_before = _page_ready_count, _page_loading_count
+    result = await send_command("action", **kwargs)
+
+    if isinstance(result, dict) and result.get("navigated") and not result.get("error"):
+        start = time.time()
+        page = await wait_for_page(ready_before, loading_before)
+        result["page"] = page
+        if page == "loaded" and last_page:
+            result["page_title"] = last_page.get("title", "")
+        print(f"[bridge] waited for page: {page} ({(time.time() - start) * 1000:.0f}ms)")
+    return result
 
 
 async def interactive_mode():

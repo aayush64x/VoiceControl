@@ -26,6 +26,8 @@ def reset_server_state():
     server._worker_task = None
     server._busy = False
     server._question_rid = None
+    server._page_loading_count = 0
+    server._page_ready_count = 0
     yield
 
 
@@ -431,3 +433,110 @@ async def test_websites_cannot_connect():
             pass
         async with websockets.connect(url):  # no Origin header (scripts/tests)
             pass
+
+
+async def _fake_extension(port, on_action):
+    """Connect as the extension; on_action(ws, msg) answers each action command."""
+    ws = await websockets.connect(f"ws://localhost:{port}")
+
+    async def loop():
+        async for raw in ws:
+            msg = json.loads(raw)
+            if msg.get("type") == "action":
+                await on_action(ws, msg)
+
+    task = asyncio.create_task(loop())
+    await asyncio.sleep(0.05)
+    return ws, task
+
+
+@pytest.mark.asyncio
+async def test_navigating_action_waits_for_new_page(monkeypatch):
+    """A click that loads a new page returns only after the new page is ready."""
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+
+        async def on_action(ws, msg):
+            await ws.send(json.dumps({"id": msg["id"], "result": {"success": True, "action": "click", "navigated": True}}))
+            await asyncio.sleep(0.2)
+            await ws.send(json.dumps({"type": "page_loading", "url": "https://x.test/b"}))
+            await asyncio.sleep(0.3)
+            await ws.send(json.dumps({"type": "page_ready", "title": "Forecast", "url": "https://x.test/b", "count": 3}))
+
+        ws, task = await _fake_extension(port, on_action)
+        start = asyncio.get_running_loop().time()
+        result = await server.do_action("click", element=5)
+        elapsed = asyncio.get_running_loop().time() - start
+        task.cancel()
+        await ws.close()
+
+        assert result["page"] == "loaded"
+        assert result["page_title"] == "Forecast"
+        assert 0.4 < elapsed < 2
+
+
+@pytest.mark.asyncio
+async def test_link_that_does_not_navigate_returns_quickly(monkeypatch):
+    """If no page load starts (e.g. a link that opens a menu), don't wait the full timeout."""
+    monkeypatch.setattr(server, "NAV_START_WAIT", 0.3)
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+
+        async def on_action(ws, msg):
+            await ws.send(json.dumps({"id": msg["id"], "result": {"success": True, "action": "click", "navigated": True}}))
+
+        ws, task = await _fake_extension(port, on_action)
+        result = await server.do_action("click", element=5)
+        task.cancel()
+        await ws.close()
+        assert result["page"] == "no_navigation"
+
+
+@pytest.mark.asyncio
+async def test_slow_page_reported_not_hung(monkeypatch):
+    monkeypatch.setattr(server, "NAV_LOAD_WAIT", 0.4)
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+
+        async def on_action(ws, msg):
+            await ws.send(json.dumps({"type": "page_loading", "url": "https://slow.test"}))
+            await ws.send(json.dumps({"id": msg["id"], "result": {"success": True, "action": "back", "navigated": True}}))
+
+        ws, task = await _fake_extension(port, on_action)
+        result = await server.do_action("back")
+        task.cancel()
+        await ws.close()
+        assert result["page"] == "slow"
+
+
+@pytest.mark.asyncio
+async def test_page_ready_before_reply_still_counts():
+    """Fast pages can finish loading before the action's reply arrives."""
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+
+        async def on_action(ws, msg):
+            await ws.send(json.dumps({"type": "page_ready", "title": "Fast", "url": "https://f.test", "count": 1}))
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"id": msg["id"], "result": {"success": True, "action": "click", "navigated": True}}))
+
+        ws, task = await _fake_extension(port, on_action)
+        result = await server.do_action("click", element=1)
+        task.cancel()
+        await ws.close()
+        assert result["page"] == "loaded"
+
+
+@pytest.mark.asyncio
+async def test_non_navigating_action_does_not_wait():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+
+        async def on_action(ws, msg):
+            await ws.send(json.dumps({"id": msg["id"], "result": {"success": True, "action": "type", "changed": True}}))
+
+        ws, task = await _fake_extension(port, on_action)
+        result = await server.do_action("type", element=2, value="hi")
+        task.cancel()
+        await ws.close()
+        assert "page" not in result

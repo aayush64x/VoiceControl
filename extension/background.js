@@ -17,6 +17,9 @@ async function ensureContentScript(tabId) {
   }
 }
 
+const UNREACHABLE = "Could not reach this page. It may still be loading, or it is a browser page "
+  + "the extension can't control (chrome://, Web Store, PDF).";
+
 function forwardToTab(message, sendResponse) {
   chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
     if (!tabs[0]) {
@@ -28,7 +31,7 @@ function forwardToTab(message, sendResponse) {
 
     chrome.tabs.sendMessage(tabId, message, (response) => {
       if (chrome.runtime.lastError) {
-        sendResponse({ error: "Could not reach page. Try refreshing." });
+        sendResponse({ error: UNREACHABLE });
         return;
       }
       sendResponse(response);
@@ -58,4 +61,11 @@ chrome.commands.onCommand.addListener((command, tab) => {
     // Panel wasn't open yet — it starts the mic itself once it has loaded
     chrome.storage.session.set({ startMicOnOpen: Date.now() });
   });
+});
+
+// A tab started loading a new page — tell the backend so actions that navigate
+// wait for the new page instead of reading the old one.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "loading" || !tab.active) return;
+  chrome.runtime.sendMessage({ type: "page_loading", url: changeInfo.url || tab.url }).catch(() => {});
 });

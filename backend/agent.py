@@ -195,10 +195,18 @@ def read_page() -> str:
     """
     result = _bridge(server.list_elements())
     if not result or "error" in result:
+        # Usually the page is mid-load — give it a moment and try once more
+        time.sleep(1.5)
+        result = _bridge(server.list_elements())
+    if not result or "error" in result:
         # Report the failure rather than an old snapshot — acting on stale
         # element numbers clicks the wrong things.
         err = result.get("error", "unknown") if result else "no response"
-        return f"Error reading page: {err}"
+        return (
+            f"Error reading page: {err} The page may still be loading, or it is a browser page "
+            "the extension can't control (chrome://, Web Store, PDF). Wait and try once more, "
+            "or open a normal website."
+        )
     return _format_page(result)
 
 
@@ -224,7 +232,8 @@ def act(action: str, element: int = 0, value: str = "", submit: bool = False) ->
     """
     elem = element if element > 0 else None
     val = value if value else None
-    result = _bridge(server.do_action(action, element=elem, value=val, submit=submit))
+    # Actions that load a new page wait for it (up to ~10s), so allow longer than usual
+    result = _bridge(server.do_action(action, element=elem, value=val, submit=submit), timeout=25)
 
     if not result:
         return "Error: no response from browser."
@@ -234,8 +243,18 @@ def act(action: str, element: int = 0, value: str = "", submit: bool = False) ->
     parts = [f"Done: {result.get('action', action)}"]
     if result.get("label"):
         parts.append(f"on '{result['label']}'")
-    if result.get("navigated"):
+    page = result.get("page")
+    if page == "loaded":
+        title = result.get("page_title")
+        parts.append(f"— new page loaded{f': {title!r}' if title else ''}. Call read_page to see it.")
+    elif page == "no_navigation":
+        parts.append("— no new page loaded (the page may have updated in place). Call read_page to check.")
+    elif page == "slow":
+        parts.append("— a new page is still loading. Call read_page; if it errors, try once more.")
+    elif result.get("navigated"):
         parts.append("— page navigated, call read_page to see the new page")
+    elif result.get("changed") is False and action in ("click", "select"):
+        parts.append("— nothing on the page changed")
     if result.get("submitted"):
         parts.append("and submitted" + (" (clicked Send)" if result.get("sentWith") else ""))
     if result.get("warning"):
@@ -282,7 +301,7 @@ def fill_form(fields: list[dict]) -> str:
         if fa in ("checkbox", "radio"):
             fa = "click"
 
-        result = _bridge(server.do_action(fa, element=elem, value=val))
+        result = _bridge(server.do_action(fa, element=elem, value=val), timeout=25)
 
         if not result or result.get("error"):
             err = result.get("error", "no response") if result else "no response"
@@ -290,7 +309,8 @@ def fill_form(fields: list[dict]) -> str:
             fail_count += 1
         else:
             label = result.get("label", f"element {elem}")
-            lines.append(f"  {i}. {label}: OK")
+            note = {"loaded": " — new page loaded", "slow": " — new page still loading"}.get(result.get("page"), "")
+            lines.append(f"  {i}. {label}: OK{note}")
             ok_count += 1
 
     summary = f"Filled {ok_count}/{ok_count + fail_count} fields."
@@ -422,6 +442,8 @@ Efficiency rules:
 If not done by then, report progress and stop.
 
 Action rules:
+- The first line "[You are on: …]" tells you the current page. Work on THAT page when it can do the \
+task (e.g. use its own search box). NEVER open the page you are already on.
 - ALWAYS read_page before your first action.
 - After any navigation, call read_page — old element numbers are no longer valid.
 - Use element numbers from the LATEST read_page only.
@@ -473,7 +495,8 @@ Output rules:
 - NEVER give advice, lists, or information the user didn't ask for.
 - NEVER reply with a menu of options or ask what the user meant in plain text. Act on your best guess; \
 only use ask_user when you truly cannot continue (e.g. missing form data).
-- Report ONLY what you did: "Opened usa.gov. Clicked Benefits. Found 3 results."
+- Your final reply is READ ALOUD: 1-2 short sentences, no lists, no markdown. \
+E.g. "Kansas City: clear and 72 degrees, high of 90 tomorrow." or "Searched YouTube for cat videos."
 - If you cannot complete the task, say what you tried and stop.
 """
 
@@ -556,6 +579,19 @@ async def _run_direct(text):
 _running_agent = None
 
 
+def _with_location(text):
+    """Prefix the command with the page the user is on (title + address only).
+
+    Only the location — never the element list, whose numbers may be stale.
+    """
+    page = server.last_page or {}
+    url = page.get("url")
+    if not url:
+        return text
+    title = page.get("title") or "untitled page"
+    return f"[You are on: {title} — {url}]\n{text}"
+
+
 def cancel_current():
     """Stop the agent task that is running now, if any. Safe from any thread."""
     if _running_agent is not None:
@@ -570,7 +606,7 @@ def _run_agent(text, tier):
     agent.messages.clear()
     _running_agent = agent
     try:
-        response = agent(text)
+        response = agent(_with_location(text))
     finally:
         _running_agent = None
     if getattr(response, "stop_reason", None) == "cancelled":
