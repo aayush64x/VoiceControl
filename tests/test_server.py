@@ -695,3 +695,27 @@ async def test_open_new_tab_waits_for_the_new_page():
             await ws.send(json.dumps({"type": "page_ready", "title": "Claude", "url": "https://claude.ai/new", "count": 9}))
             result = await asyncio.wait_for(task, timeout=3)
             assert result["page"] == "loaded" and result["page_title"] == "Claude"
+
+
+@pytest.mark.asyncio
+async def test_voice_level_streams_while_recording(monkeypatch):
+    """The panel gets the mic's loudness while recording, then a release (None) when it stops."""
+    monkeypatch.setattr(server, "LEVEL_INTERVAL", 0.02)
+    sent = []
+
+    async def to_panel(msg):
+        sent.append(msg)
+
+    monkeypatch.setattr(server, "_send_to_client", to_panel)
+
+    class FakeTranscriber:
+        running = True
+        level = 0.42
+
+    t = FakeTranscriber()
+    task = asyncio.create_task(server._stream_levels(t))
+    await asyncio.sleep(0.07)
+    t.running = False
+    await asyncio.wait_for(task, timeout=1)
+    assert {"type": "level", "value": 0.42} in sent
+    assert sent[-1] == {"type": "level", "value": None}

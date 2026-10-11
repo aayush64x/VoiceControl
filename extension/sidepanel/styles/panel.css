@@ -886,3 +886,21 @@ body[data-state="listening"] .mic__glass {
     linear-gradient(165deg, #ffb3b3 0%, #f07a7a 52%, #e05d5d 100%);
 }
 #press-hint { min-height: 1.3em; }
+
+/* Why a step failed or was blocked, under its label */
+.step__detail {
+  grid-column: 2 / -1;
+  margin-top: -2px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--c-text-3);
+  overflow-wrap: anywhere;
+}
+.step[data-status="error"] .step__detail { color: #9a3b3b; }
+
+/* Replies keep their line breaks (e.g. the "list" of numbered elements), and long ones scroll */
+.status__sub {
+  white-space: pre-line;
+  max-height: 40vh;
+  overflow-y: auto;
+}

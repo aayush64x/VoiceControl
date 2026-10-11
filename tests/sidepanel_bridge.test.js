@@ -387,3 +387,29 @@ describe("control words", () => {
     expect(sub()).toBe("Chicago tomorrow: sunny, high of 73.");
   });
 });
+
+describe("live voice level and step details", () => {
+  test("the mascot follows the backend's real mic level while recording", () => {
+    const { P, ws } = loadPanel();
+    ws.open();
+    document.getElementById("mic-btn").click();
+    ws.receive({ type: "level", value: 0.6 });
+    expect(P.mascot.external).toBe(0.6);
+    document.getElementById("mic-btn").click(); // stop
+    expect(P.mascot.external).toBe(null);
+    ws.receive({ type: "level", value: 0.9 }); // a late update after stopping is ignored
+    expect(P.mascot.external).toBe(null);
+  });
+
+  test("a failed step says why; a successful one doesn't add clutter", () => {
+    const { ws } = loadPanel();
+    ws.open();
+    ws.receive({ type: "agent_thinking", text: "x" });
+    ws.receive({ type: "step", step_id: "a", tool: "act", input: "click #9", status: "running" });
+    ws.receive({ type: "step", step_id: "a", tool: "act", status: "error", detail: "Error: Element 9 not found." });
+    ws.receive({ type: "step", step_id: "b", tool: "read_page", status: "running" });
+    ws.receive({ type: "step", step_id: "b", tool: "read_page", status: "ok", detail: "Page: SSA — 15 elements" });
+    const details = Array.from(document.querySelectorAll("#steps-list .step__detail")).map((d) => d.textContent);
+    expect(details).toEqual(["Element 9 not found."]);
+  });
+});

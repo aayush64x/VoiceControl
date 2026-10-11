@@ -218,6 +218,17 @@ async def enqueue_command(text):
         await _send_to_client({"type": "queued", "text": text, "ahead": ahead})
 
 
+LEVEL_INTERVAL = 0.08  # seconds between voice-level updates (~12 a second)
+
+
+async def _stream_levels(transcriber):
+    """While recording, send the mic's loudness so the panel's mascot follows your voice."""
+    while transcriber.running:
+        await _send_to_client({"type": "level", "value": round(transcriber.level, 3)})
+        await asyncio.sleep(LEVEL_INTERVAL)
+    await _send_to_client({"type": "level", "value": None})  # recording ended: release the mascot
+
+
 async def handler(websocket):
     global client, _transcriber, last_page, _page_loading_count, _page_ready_count, _loading
     client = websocket
@@ -254,6 +265,9 @@ async def handler(websocket):
 
                 await _transcriber.start(on_transcript)
                 print("[voice] Recording started")
+                task = asyncio.create_task(_stream_levels(_transcriber))
+                _tasks.add(task)
+                task.add_done_callback(_tasks.discard)
                 continue
 
             if msg_type == "voice_stop":

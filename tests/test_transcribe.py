@@ -133,3 +133,23 @@ async def test_audio_callback_only_records_while_running(mock_stream):
 
 def test_default_config():
     assert VoiceTranscriber()._sample_rate == 16000
+
+
+def test_voice_level_scale():
+    from transcribe import voice_level
+    assert voice_level(np.zeros(1024, dtype="int16")) == 0.0
+    quiet = (np.random.default_rng(1).normal(0, 0.003 * 32768, 1024)).astype("int16")
+    speech = (np.random.default_rng(2).normal(0, 0.08 * 32768, 1024)).astype("int16")
+    assert voice_level(quiet) < 0.1
+    assert 0.5 < voice_level(speech) <= 1.0
+    assert voice_level(None) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_audio_callback_tracks_level(mock_stream):
+    t = VoiceTranscriber()
+    await t.start(AsyncMock())
+    audio_cb = mock_stream.call_args.kwargs["callback"]
+    loud = (np.random.default_rng(3).normal(0, 0.2 * 32768, (1024, 1))).astype("int16")
+    audio_cb(loud, 1024, None, None)
+    assert t.level > 0.5

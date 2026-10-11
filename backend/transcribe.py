@@ -14,6 +14,20 @@ import speech_recognition as sr
 MIN_AUDIO_BYTES = 3200
 
 
+def voice_level(samples):
+    """0..1 loudness of a block of int16 samples, for the panel's mascot.
+
+    Maps -50 dBFS (quiet room) .. -10 dBFS (speaking up close) onto 0..1.
+    """
+    if samples is None or len(samples) == 0:
+        return 0.0
+    rms = float(np.sqrt(np.mean(np.square(samples.astype(np.float32) / 32768.0))))
+    if rms <= 1e-6:
+        return 0.0
+    db = 20 * np.log10(rms)
+    return float(min(1.0, max(0.0, (db + 50) / 40)))
+
+
 class VoiceTranscriber:
     def __init__(self, sample_rate=16000):
         self._sample_rate = sample_rate
@@ -22,6 +36,7 @@ class VoiceTranscriber:
         self.running = False
         self._recognizer = sr.Recognizer()
         self._stream = None
+        self.level = 0.0  # live loudness while recording (read by the server)
 
     async def start(self, callback):
         """Start recording. callback(text, is_final, error=None) is awaited once on stop."""
@@ -31,13 +46,14 @@ class VoiceTranscriber:
         def audio_callback(indata, frames, time_info, status):
             if self.running:
                 self._frames.append(indata.copy())
+                self.level = voice_level(indata)
 
         try:
             self._stream = sd.InputStream(
                 samplerate=self._sample_rate,
                 channels=1,
                 dtype="int16",
-                blocksize=4096,
+                blocksize=1024,  # ~64ms blocks: smooth enough for the live voice level
                 callback=audio_callback,
             )
             self._stream.start()

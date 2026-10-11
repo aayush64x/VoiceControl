@@ -109,7 +109,8 @@
     recording = true;
     pendingSend = false;
     P.setState('listening', { transcript: '' });
-    P.mascot.simulate(true); // the mic is on the backend, so the orb follows a voice-like rhythm
+    // The mic is on the backend: until its live level arrives, the orb follows a voice-like rhythm
+    P.mascot.simulate(true);
     send({ type: 'voice_start' });
   }
 
@@ -117,6 +118,7 @@
     if (!recording) return;
     recording = false;
     P.mascot.simulate(false);
+    P.mascot.setLevel(null);
     send({ type: 'voice_stop', cancel: !sendToAgent });
     if (sendToAgent) {
       pendingSend = true;
@@ -445,12 +447,28 @@
       const update = { status };
       if (status !== 'running') update.label = `${stepIds[key].label}${ms}`;
       P.updateStep(stepIds[key].id, update);
+      if (status !== 'running') setStepDetail(stepIds[key].id, msg.detail, status);
       return;
     }
     const label = stepLabel(msg);
     const id = P.addStep({ tool: msg.tool === 'route' ? 'route' : msg.tool, label, status });
     if (key) stepIds[key] = { id, label };
     if (status === 'running' && P.state !== 'ask' && P.state !== 'confirm') P.setProgress(`${label}…`);
+  }
+
+  // A small line under a finished step saying what happened: always for
+  // failures ("Element 9 not found"), and for blocked or cancelled steps
+  function setStepDetail(id, detail, status) {
+    if (!detail || status === 'done') return;
+    const li = document.querySelector(`#steps-list [data-id="${CSS.escape(id)}"]`);
+    if (!li) return;
+    let line = li.querySelector('.step__detail');
+    if (!line) {
+      line = document.createElement('span');
+      line.className = 'step__detail';
+      li.append(line);
+    }
+    line.textContent = detail.replace(/^Error:\s*/, '');
   }
 
   function clearStepState() {
@@ -553,6 +571,11 @@
 
     switch (msg.type) {
       case 'transcript': handleTranscript(msg); return;
+
+      case 'level':
+        // Real mic loudness from the backend: the mascot and waveform follow your voice
+        P.mascot.setLevel(recording && msg.value != null ? msg.value : null);
+        return;
 
       case 'agent_thinking':
         endForm(); // a new task starts: nothing carries over
