@@ -52,6 +52,10 @@ _DIRECT_PATTERNS = [
     (r"^back$", lambda m: ("back", None, None)),
     (r"^open\s+(https?://\S+|[\w.-]+\.\w{2,})$", lambda m: ("open", None, m.group(1))),
     (r"^list$", lambda m: ("list", None, None)),
+    # Number tags on the page: "show numbers", "hide numbers", "overlay on/off", "turn numbers off"
+    (r"^(?:show|turn on|enable)\s+(?:the\s+)?(?:numbers?|number tags|overlays?)$", lambda m: ("overlays", None, "on")),
+    (r"^(?:hide|turn off|disable|remove)\s+(?:the\s+)?(?:numbers?|number tags|overlays?)$", lambda m: ("overlays", None, "off")),
+    (r"^(?:turn\s+)?(?:the\s+)?(?:numbers?|overlays?)\s+(on|off)$", lambda m: ("overlays", None, m.group(1).lower())),
 ]
 
 # Site commands: "search X", "play X on youtube", "ask chatgpt X".
@@ -770,6 +774,10 @@ def classify(text):
 
 async def _run_direct(text):
     action, element, value = try_direct(text)
+    if action == "overlays":
+        on = value == "on"
+        await server._send_to_client({"type": "set_overlays", "on": on})
+        return "Numbers shown on the page." if on else "Numbers hidden."
     if action == "list":
         result = await server.list_elements()
         if result and "elements" in result:

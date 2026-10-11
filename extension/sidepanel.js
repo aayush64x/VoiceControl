@@ -108,6 +108,11 @@ function connectWs() {
       return;
     }
 
+    if (msg.type === "set_overlays") {
+      setOverlays(!!msg.on);
+      return;
+    }
+
     if (msg.type === "queued") {
       const ahead = msg.ahead === 1 ? "1 command" : msg.ahead + " commands";
       cmdResult.textContent += "\n\nQueued: " + msg.text + " (after " + ahead + ")";
@@ -418,6 +423,20 @@ cmdSend.addEventListener("click", runCommand);
 cmdInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") runCommand();
 });
+
+// --- Number tags on the page: on/off ---
+// Saved in chrome.storage; every tab's page script listens and shows/hides them.
+const overlayToggle = document.getElementById("show-overlays");
+
+function setOverlays(on) {
+  overlayToggle.checked = on;
+  chrome.storage.local.set({ showOverlays: on });
+}
+
+chrome.storage.local.get("showOverlays", (stored) => {
+  overlayToggle.checked = !(stored && stored.showOverlays === false);
+});
+overlayToggle.addEventListener("change", () => setOverlays(overlayToggle.checked));
 
 // --- What site memory knows about the current website ---
 const siteInfoEl = document.getElementById("site-info");

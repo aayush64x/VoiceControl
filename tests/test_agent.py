@@ -583,3 +583,32 @@ class TestFreshPageAfterActions:
 def asyncio_run(coro):
     import asyncio
     return asyncio.run(coro)
+
+
+class TestOverlayCommands:
+    def test_turn_numbers_on(self):
+        for text in ["show numbers", "Show the numbers.", "turn on overlays", "overlay on", "numbers on",
+                     "turn numbers on", "enable number tags"]:
+            assert try_direct(text) == ("overlays", None, "on"), text
+
+    def test_turn_numbers_off(self):
+        for text in ["hide numbers", "Hide the numbers", "turn off overlay", "overlays off", "numbers off",
+                     "turn the numbers off", "remove overlays"]:
+            assert try_direct(text) == ("overlays", None, "off"), text
+
+    def test_classified_as_instant(self):
+        assert classify("hide numbers") == "direct"
+
+    def test_tells_the_panel(self, monkeypatch):
+        import asyncio
+        import agent
+        import server
+        sent = []
+
+        async def to_panel(msg):
+            sent.append(msg)
+
+        monkeypatch.setattr(server, "_send_to_client", to_panel)
+        assert asyncio.run(agent._run_direct("hide numbers")) == "Numbers hidden."
+        assert asyncio.run(agent._run_direct("show numbers")) == "Numbers shown on the page."
+        assert sent == [{"type": "set_overlays", "on": False}, {"type": "set_overlays", "on": True}]

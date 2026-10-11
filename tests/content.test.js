@@ -1112,3 +1112,40 @@ describe("question text above radio groups (SSA-style markup, B4)", () => {
     expect(getPageContext().headings).toEqual(["Eligibility", "Are you married?"]);
   });
 });
+
+describe("number tags on/off", () => {
+  const { setOverlaysEnabled } = content;
+  const tags = () => document.querySelectorAll("#voice-agent-overlays [data-overlay-for]").length;
+
+  afterEach(() => setOverlaysEnabled(true));
+
+  test("turning numbers off removes them and keeps them off after a re-scan", () => {
+    document.body.innerHTML = `<button>One</button><button>Two</button>`;
+    document.querySelectorAll("button").forEach(makeVisible);
+    listElements();
+    content.showOverlays();
+    expect(tags()).toBe(2);
+
+    setOverlaysEnabled(false);
+    expect(tags()).toBe(0);
+    listElements();
+    content.showOverlays(); // e.g. after a click — still hidden
+    expect(tags()).toBe(0);
+  });
+
+  test("numbers still work for clicking while hidden", () => {
+    document.body.innerHTML = `<button>Go</button>`;
+    makeVisible(document.querySelector("button"));
+    setOverlaysEnabled(false);
+    const num = listElements()[0].num;
+    expect(doAction("click", num).success).toBe(true);
+  });
+
+  test("turning numbers back on shows them, scanning first if needed", () => {
+    document.body.innerHTML = `<button>One</button>`;
+    makeVisible(document.querySelector("button"));
+    setOverlaysEnabled(false);
+    setOverlaysEnabled(true);
+    expect(tags()).toBe(1);
+  });
+});

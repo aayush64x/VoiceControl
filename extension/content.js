@@ -268,7 +268,25 @@ function clearOverlays() {
   container.innerHTML = "";
 }
 
+// Number tags can be turned off from the side panel ("hide numbers"). The
+// setting lives in chrome.storage so every tab, including new ones, follows it.
+let overlaysEnabled = true;
+
+function setOverlaysEnabled(on) {
+  overlaysEnabled = on;
+  if (on) {
+    if (!Object.keys(elementMap).length) listElements();
+    showOverlays();
+  } else {
+    clearOverlays();
+  }
+}
+
 function showOverlays() {
+  if (!overlaysEnabled) {
+    clearOverlays();
+    return;
+  }
   clearOverlays();
   const container = getOverlayContainer();
   for (const [num, el] of Object.entries(elementMap)) {
@@ -905,6 +923,15 @@ function announceReady() {
 if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage && !window._voiceAgentLoaded) {
   window._voiceAgentLoaded = true;
 
+  if (chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get("showOverlays", (stored) => {
+      if (stored && stored.showOverlays === false) setOverlaysEnabled(false);
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes.showOverlays) setOverlaysEnabled(changes.showOverlays.newValue !== false);
+    });
+  }
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "list_elements") {
       const elements = listElements();
@@ -1004,5 +1031,5 @@ function resetForTest() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { findSearchBox, findChatBox, findKeyElements, stableSelector, resolveKeyElement, typeAndSubmit, readMainText, waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
+  module.exports = { setOverlaysEnabled, findSearchBox, findChatBox, findKeyElements, stableSelector, resolveKeyElement, typeAndSubmit, readMainText, waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
 }

@@ -101,6 +101,7 @@
     #cmd-result.error { color: #f88; }
     #site-info { font-size: 11px; color: #6a9fff; margin-bottom: 10px; min-height: 14px; }
     #site-info .learning { color: #888; }
+    #overlay-toggle { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #aaa; margin: 8px 0 4px; cursor: pointer; }
     #mic-hint { font-size: 11px; color: #888; margin-top: 4px; }
     #mic-hint kbd { background: #2a2a4a; border-radius: 3px; padding: 0 4px; font-family: inherit; color: #ccc; }
     #speak-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: #aaa; margin-top: 6px; cursor: pointer; }
@@ -278,6 +279,7 @@
   </div>
   <hr class="divider">
   <button id="list-btn">List Elements</button>
+  <label id="overlay-toggle" title="Number tags on the page — also &quot;show numbers&quot; / &quot;hide numbers&quot;"><input type="checkbox" id="show-overlays" checked> Show numbers on page</label>
   <div id="cmd-box">
     <input id="cmd-input" type="text" placeholder="click 7, type 3 hello, or ask anything">
     <button id="cmd-send">Go</button>
