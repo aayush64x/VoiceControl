@@ -18,9 +18,34 @@ on_user_input = None
 _transcriber = None
 _processing = False
 
+_tasks = set()
+
+async def _run_user_input(websocket, text):
+    """Run the agent in the background so the handler keeps reading messages."""
+    global _processing
+    try:
+        await websocket.send(json.dumps({"type": "agent_thinking"}))
+        print(f"[voice] Processing: {text}")
+        result = await on_user_input(text)
+        await websocket.send(json.dumps({
+            "type": "agent_response",
+            "text": str(result),
+        }))
+    except Exception as exc:
+        print(f"[voice] Agent error: {exc}")
+        try:
+            await websocket.send(json.dumps({
+                "type": "agent_response",
+                "text": f"Error: {exc}",
+            }))
+        except Exception:
+            pass
+    finally:
+        _processing = False
+
 
 async def handler(websocket):
-    global client, _transcriber, _processing
+    global client, _transcriber, _processing, last_page
     client = websocket
     print("[bridge] Extension connected")
     try:
@@ -72,29 +97,21 @@ async def handler(websocket):
                         "text": "Still processing previous command...",
                     }))
                     continue
+                if not on_user_input:
+                    await websocket.send(json.dumps({
+                        "type": "agent_response",
+                        "text": "Agent not ready. Start the backend with agent.py.",
+                    }))
+                    continue
                 _processing = True
-                try:
-                    if on_user_input:
-                        await websocket.send(json.dumps({"type": "agent_thinking"}))
-                        print(f"[voice] Processing: {text}")
-                        result = await on_user_input(text)
-                        await websocket.send(json.dumps({
-                            "type": "agent_response",
-                            "text": str(result),
-                        }))
-                    else:
-                        await websocket.send(json.dumps({
-                            "type": "agent_response",
-                            "text": "Agent not ready. Start the backend with agent.py.",
-                        }))
-                finally:
-                    _processing = False
+                task = asyncio.create_task(_run_user_input(websocket, text))
+                _tasks.add(task)
+                task.add_done_callback(_tasks.discard)
                 continue
 
             if msg.get("id") in pending:
                 pending[msg["id"]].set_result(msg.get("result"))
             elif msg_type == "page_ready":
-                global last_page
                 last_page = msg
                 print(f"[bridge] Page ready: {msg.get('title', '?')} ({msg.get('count', 0)} elements)")
     except websockets.ConnectionClosed:
