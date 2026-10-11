@@ -15,6 +15,7 @@ from urllib.parse import quote_plus, urlparse
 
 from dotenv import load_dotenv
 from strands import Agent, tool
+from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent
 from strands.models import BedrockModel
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -298,6 +299,9 @@ def fill_form(fields: list[dict]) -> str:
     return summary + "\n" + "\n".join(lines)
 
 
+_CANCELLED_ANSWER = "The user gave a new command instead of answering. Stop this task now and take no further actions."
+
+
 @tool
 def ask_user(question: str, yes_no: bool = False) -> str:
     """Ask the user a question and wait for their answer.
@@ -311,11 +315,90 @@ def ask_user(question: str, yes_no: bool = False) -> str:
     """
     result = _bridge(server.ask_user(question, yes_no), timeout=125)
     if result and result.get("cancelled"):
-        return "The user gave a new command instead of answering. Stop this task now and take no further actions."
+        return _CANCELLED_ANSWER
     if not result or "error" in result:
         err = result.get("error", "no response") if result else "no response"
         return f"Error asking user: {err}"
     return result.get("answer", "No answer provided.")
+
+
+# ---------------------------------------------------------------------------
+# Step stream — every tool call shows in the side panel as it happens
+# ---------------------------------------------------------------------------
+
+def _emit(msg):
+    """Send a message to the side panel from any thread, without waiting."""
+    if _server_loop is None:
+        return
+    asyncio.run_coroutine_threadsafe(server._send_to_client(msg), _server_loop)
+
+
+def _short(text, limit=90):
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _describe_input(name, inp):
+    """One-line summary of a tool's input for the step list."""
+    inp = inp or {}
+    if name == "read_page":
+        return ""
+    if name == "act":
+        parts = [inp.get("action", "")]
+        if inp.get("element"):
+            parts.append(f"#{inp['element']}")
+        if inp.get("value"):
+            parts.append(f'"{inp["value"]}"')
+        if inp.get("submit"):
+            parts.append("+ submit")
+        return " ".join(parts)
+    if name == "fill_form":
+        fields = inp.get("fields") or []
+        return f"{len(fields)} field{'s' if len(fields) != 1 else ''}"
+    if name == "ask_user":
+        return inp.get("question", "")
+    return _short(json.dumps(inp, ensure_ascii=False), 70)
+
+
+def _result_text(result):
+    if isinstance(result, Exception):
+        return f"Error: {result}"
+    try:
+        return " ".join(c.get("text", "") for c in result.get("content", []) if isinstance(c, dict))
+    except AttributeError:
+        return str(result)
+
+
+def _on_before_tool(event: BeforeToolCallEvent):
+    tu = event.tool_use
+    _emit({
+        "type": "step",
+        "step_id": tu.get("toolUseId"),
+        "tool": tu.get("name"),
+        "input": _short(_describe_input(tu.get("name"), tu.get("input"))),
+        "status": "running",
+    })
+
+
+def _on_after_tool(event: AfterToolCallEvent):
+    tu = event.tool_use
+    text = _result_text(event.result)
+    failed = (
+        isinstance(event.result, Exception)
+        or (isinstance(event.result, dict) and event.result.get("status") == "error")
+        or text.startswith("Error")
+        or "FAIL" in text
+    )
+    first_line = text.strip().split("\n")[0] if text.strip() else ""
+    _emit({
+        "type": "step",
+        "step_id": tu.get("toolUseId"),
+        "tool": tu.get("name"),
+        "status": "cancelled" if event.cancel_message or text.startswith(_CANCELLED_ANSWER[:30])
+        else ("error" if failed else "ok"),
+        "detail": _short(first_line, 110),
+        "ms": round(event.duration * 1000) if event.duration is not None else None,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +492,8 @@ def _get_agent(tier):
             tools=[read_page, act, fill_form, ask_user],
             memory_manager=_memory_manager,
         )
+        _agents[tier].hooks.add_callback(BeforeToolCallEvent, _on_before_tool)
+        _agents[tier].hooks.add_callback(AfterToolCallEvent, _on_after_tool)
     return _agents[tier]
 
 
@@ -497,10 +582,17 @@ async def process_input(text):
     tier = classify(text)
     if tier == "direct":
         print("[tier 1] Direct command — no model call")
+        _emit({"type": "step", "tool": "route", "input": "Direct command — no AI", "status": "ok"})
         return await _run_direct(text)
 
     label = "Haiku" if tier == "haiku" else "Sonnet"
     print(f"[tier {'2' if tier == 'haiku' else '3'}] Using {label}")
+    _emit({
+        "type": "step",
+        "tool": "route",
+        "input": f"Strands agent · Claude {label} ({'quick task' if tier == 'haiku' else 'multi-step task'})",
+        "status": "ok",
+    })
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _run_agent, text, tier)
 

@@ -99,6 +99,35 @@
       overflow-y: auto;
     }
     #cmd-result.error { color: #f88; }
+    #steps-section { margin-top: 12px; display: none; }
+    #steps-section.has-steps { display: block; }
+    #steps-title { font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 6px; }
+    #steps-title .steps-sub { color: #6a9fff; font-weight: 400; }
+    #steps { list-style: none; max-height: 260px; overflow-y: auto; }
+    .step {
+      display: grid;
+      grid-template-columns: 18px 1fr auto;
+      gap: 6px;
+      align-items: start;
+      padding: 5px 6px;
+      margin-bottom: 3px;
+      border-radius: 5px;
+      background: #232342;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .step-icon { text-align: center; font-weight: 700; }
+    .step-name { color: #fff; font-weight: 600; }
+    .step-input { color: #4a9eff; word-break: break-word; }
+    .step-detail { color: #999; font-size: 11px; word-break: break-word; }
+    .step-ms { color: #777; font-size: 10px; white-space: nowrap; }
+    .step.running .step-icon { color: #ffb366; animation: pulse 1s ease-in-out infinite; }
+    .step.ok .step-icon { color: #8f8; }
+    .step.error { background: #3a2230; }
+    .step.error .step-icon { color: #f88; }
+    .step.cancelled { opacity: 0.6; }
+    .step.route { background: transparent; border: 1px dashed #3a3a5e; }
+    @keyframes pulse { 50% { opacity: 0.3; } }
     .help-text {
       margin-top: 8px;
       font-size: 11px;
@@ -247,6 +276,10 @@
   </div>
   <div class="help-text">Direct: click N · type N text · scroll · Natural: "fill out the form"</div>
   <div id="cmd-result"></div>
+  <div id="steps-section">
+    <div id="steps-title">Agent steps <span class="steps-sub">· Strands Agents SDK</span></div>
+    <ol id="steps"></ol>
+  </div>
   <div id="ask-container">
     <div id="ask-question"></div>
     <input id="ask-input" type="text" placeholder="Type your answer...">

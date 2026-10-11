@@ -85,6 +85,12 @@ function connectWs() {
     if (msg.type === "agent_thinking") {
       cmdResult.textContent = msg.text ? "Working on: " + msg.text : "Agent is thinking...";
       cmdResult.className = "";
+      clearSteps();
+      return;
+    }
+
+    if (msg.type === "step") {
+      renderStep(msg);
       return;
     }
 
@@ -316,6 +322,45 @@ cmdSend.addEventListener("click", runCommand);
 cmdInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") runCommand();
 });
+
+// --- Agent step list (one row per Strands tool call) ---
+const stepsSection = document.getElementById("steps-section");
+const stepsEl = document.getElementById("steps");
+const STEP_NAMES = {
+  route: "Route",
+  read_page: "Read page",
+  act: "Act",
+  fill_form: "Fill form",
+  ask_user: "Ask you",
+  search_memory: "Recall saved details",
+  add_memory: "Save to memory",
+};
+const STEP_ICONS = { running: "●", ok: "✓", error: "✗", cancelled: "⊘" };
+
+function clearSteps() {
+  stepsEl.textContent = "";
+  stepsSection.classList.remove("has-steps");
+}
+
+// Page text ends up in step details, so everything is set with textContent — never innerHTML
+function renderStep(step) {
+  let row = step.step_id ? stepsEl.querySelector(`[data-step-id="${CSS.escape(step.step_id)}"]`) : null;
+  if (!row) {
+    row = document.createElement("li");
+    if (step.step_id) row.dataset.stepId = step.step_id;
+    row.innerHTML = '<span class="step-icon"></span><div><div><span class="step-name"></span> <span class="step-input"></span></div><div class="step-detail"></div></div><span class="step-ms"></span>';
+    stepsEl.appendChild(row);
+    stepsSection.classList.add("has-steps");
+  }
+  const status = step.status || "running";
+  row.className = `step ${status}${step.tool === "route" ? " route" : ""}`;
+  row.querySelector(".step-icon").textContent = STEP_ICONS[status] || "●";
+  row.querySelector(".step-name").textContent = STEP_NAMES[step.tool] || step.tool;
+  if (step.input !== undefined) row.querySelector(".step-input").textContent = step.input;
+  if (step.detail !== undefined) row.querySelector(".step-detail").textContent = step.detail;
+  if (step.ms != null) row.querySelector(".step-ms").textContent = step.ms < 1000 ? `${step.ms}ms` : `${(step.ms / 1000).toFixed(1)}s`;
+  stepsEl.scrollTop = stepsEl.scrollHeight;
+}
 
 // --- Render elements list ---
 function renderElements(response) {

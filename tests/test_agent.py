@@ -235,3 +235,60 @@ class TestSeededDetails:
         assert not any("married" in k or "marital" in k for k in keys)
         text = asyncio.run(store._storage.read("permanent_kidney_failure")).decode()
         assert text == "The user does not have permanent kidney failure"
+
+
+class TestStepStream:
+    """Each Strands tool call is turned into a step message for the side panel."""
+
+    def _capture(self, monkeypatch):
+        import agent
+        sent = []
+        monkeypatch.setattr(agent, "_emit", sent.append)
+        return agent, sent
+
+    def _after(self, name, text, status="success", cancel=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            tool_use={"toolUseId": "t1", "name": name, "input": {}},
+            result={"status": status, "content": [{"text": text}], "toolUseId": "t1"},
+            cancel_message=cancel,
+            duration=0.25,
+        )
+
+    def test_describe_inputs(self):
+        from agent import _describe_input
+        assert _describe_input("act", {"action": "type", "element": 3, "value": "cats", "submit": True}) == 'type #3 "cats" + submit'
+        assert _describe_input("fill_form", {"fields": [{}, {}]}) == "2 fields"
+        assert _describe_input("fill_form", {"fields": [{}]}) == "1 field"
+        assert _describe_input("ask_user", {"question": "Married?"}) == "Married?"
+        assert _describe_input("read_page", {}) == ""
+
+    def test_before_sends_running_step(self, monkeypatch):
+        from types import SimpleNamespace
+        agent, sent = self._capture(monkeypatch)
+        agent._on_before_tool(SimpleNamespace(tool_use={"toolUseId": "t1", "name": "act", "input": {"action": "click", "element": 7}}))
+        assert sent == [{"type": "step", "step_id": "t1", "tool": "act", "input": "click #7", "status": "running"}]
+
+    def test_after_ok(self, monkeypatch):
+        agent, sent = self._capture(monkeypatch)
+        agent._on_after_tool(self._after("act", "Done: click on 'Next'"))
+        assert sent[0]["status"] == "ok"
+        assert sent[0]["ms"] == 250
+        assert sent[0]["detail"] == "Done: click on 'Next'"
+        assert "id" not in sent[0]  # "id" is reserved for bridge command replies
+
+    def test_after_error_text(self, monkeypatch):
+        agent, sent = self._capture(monkeypatch)
+        agent._on_after_tool(self._after("act", "Error: Element 9 not found."))
+        assert sent[0]["status"] == "error"
+
+    def test_after_fill_form_partial_failure(self, monkeypatch):
+        agent, sent = self._capture(monkeypatch)
+        agent._on_after_tool(self._after("fill_form", "Filled 1/2 fields. 1 failed\n  1. a: OK\n  2. element 9: FAIL — x"))
+        assert sent[0]["status"] == "error"
+        assert sent[0]["detail"] == "Filled 1/2 fields. 1 failed"
+
+    def test_after_cancelled_question(self, monkeypatch):
+        agent, sent = self._capture(monkeypatch)
+        agent._on_after_tool(self._after("ask_user", agent._CANCELLED_ANSWER))
+        assert sent[0]["status"] == "cancelled"
