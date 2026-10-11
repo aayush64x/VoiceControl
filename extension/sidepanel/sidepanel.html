@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voice Agent</title>
+  <link rel="stylesheet" href="styles/tokens.css">
+  <link rel="stylesheet" href="styles/mascot.css">
+  <link rel="stylesheet" href="styles/panel.css">
+</head>
+<body>
+  <!-- Liquid edge filter for the mascot body. JS animates the scale. -->
+  <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+    <filter id="m-liquid" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.012 0.016" numOctaves="2" seed="7" result="noise">
+        <animate attributeName="baseFrequency" dur="14s" repeatCount="indefinite"
+                 values="0.012 0.016;0.017 0.011;0.012 0.016"/>
+      </feTurbulence>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="3" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </svg>
+
+  <main class="app">
+    <section class="card" aria-labelledby="brand-name">
+      <header class="card__header">
+        <div class="brand">
+          <span class="brand__dot" aria-hidden="true"></span>
+          <h1 id="brand-name" class="brand__name">Voice Agent</h1>
+        </div>
+        <div class="header__right">
+          <span class="conn" id="conn" data-conn="offline"><span class="conn__dot" aria-hidden="true"></span><span class="conn__label">Offline</span></span>
+          <button class="power" id="power-btn" type="button" role="switch" aria-checked="true" aria-label="Voice Agent">
+            <span class="power__track" aria-hidden="true"><span class="power__thumb"></span></span>
+            <span class="power__label" aria-hidden="true">On</span>
+          </button>
+          <button class="icon-btn" id="settings-btn" type="button" aria-expanded="false" aria-controls="settings" aria-label="Settings">
+            <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="settings" id="settings" role="region" aria-labelledby="settings-title" hidden>
+        <div class="settings__head">
+          <h2 class="settings__title" id="settings-title" tabindex="-1">Settings</h2>
+          <button type="button" class="btn btn--soft btn--sm" id="settings-done">Done</button>
+        </div>
+
+        <section class="settings__group" aria-labelledby="set-mascot">
+          <h3 class="settings__label" id="set-mascot">Mascot</h3>
+          <div class="seg" role="radiogroup" aria-label="Mascot style">
+            <label><input type="radio" name="renderer" value="three"> 3D orb</label>
+            <label><input type="radio" name="renderer" value="spline"> Spline</label>
+            <label><input type="radio" name="renderer" value="css"> Simple</label>
+          </div>
+          <div class="setting">
+            <label for="pref-eyes">Show eyes on the orb</label>
+            <input type="checkbox" class="switch" id="pref-eyes">
+          </div>
+          <p class="settings__note" id="mascot-diag" aria-live="off"></p>
+        </section>
+
+        <section class="settings__group" aria-labelledby="set-mic">
+          <h3 class="settings__label" id="set-mic">Microphone</h3>
+          <div class="setting">
+            <span>Talk (panel focused)</span>
+            <kbd>Space</kbd>
+          </div>
+          <div class="setting">
+            <span>Talk from any page</span>
+            <kbd>Option+Shift+V</kbd>
+          </div>
+          <p class="settings__note">Choose the microphone in your computer's sound settings: the backend records from the system input.</p>
+        </section>
+
+        <section class="settings__group" aria-labelledby="set-voice">
+          <h3 class="settings__label" id="set-voice">Voice</h3>
+          <div class="setting">
+            <label for="pref-speak">Always speak replies</label>
+            <input type="checkbox" class="switch" id="pref-speak">
+          </div>
+          <div class="setting">
+            <label for="set-rate">Speaking speed</label>
+            <input type="range" id="set-rate" min="0.8" max="1.6" step="0.1" value="1.3">
+          </div>
+        </section>
+
+        <section class="settings__group" aria-labelledby="set-a11y">
+          <h3 class="settings__label" id="set-a11y">Accessibility</h3>
+          <div class="setting">
+            <label for="pref-motion">Reduce motion</label>
+            <input type="checkbox" class="switch" id="pref-motion">
+          </div>
+          <div class="setting">
+            <label for="pref-numbers">Show numbers on the page</label>
+            <input type="checkbox" class="switch" id="pref-numbers" checked>
+          </div>
+          <div class="setting">
+            <label for="pref-steps">Show technical steps</label>
+            <input type="checkbox" class="switch" id="pref-steps">
+          </div>
+        </section>
+
+        <section class="settings__group" aria-labelledby="set-demo" hidden>
+          <h3 class="settings__label" id="set-demo">Demo</h3>
+          <div class="settings__actions">
+            <button type="button" class="btn btn--quiet btn--sm" data-action="demo">Run demo flow</button>
+            <button type="button" class="btn btn--quiet btn--sm" data-action="demo-ask">Run with a question</button>
+          </div>
+          <div class="menu__grid" aria-label="Jump to state" role="group">
+            <button type="button" class="menu__chip" data-jump="idle">Idle</button>
+            <button type="button" class="menu__chip" data-jump="listening">Listening</button>
+            <button type="button" class="menu__chip" data-jump="thinking">Thinking</button>
+            <button type="button" class="menu__chip" data-jump="working">Working</button>
+            <button type="button" class="menu__chip" data-jump="confirm">Confirm</button>
+            <button type="button" class="menu__chip" data-jump="done">Done</button>
+            <button type="button" class="menu__chip" data-jump="ask">Question</button>
+            <button type="button" class="menu__chip" data-jump="error">Error</button>
+          </div>
+        </section>
+
+        <p class="settings__foot">
+          Say <q>settings overlay on/off</q> or <q>settings speak on/off</q> to change these by voice.
+        </p>
+      </div>
+
+      <div class="main-view" id="main-view">
+      <p class="site-info" id="site-info" aria-live="polite" title="What the agent has learned about this website"></p>
+      <div class="stage">
+        <div class="mascot" id="mascot" data-state="idle" aria-hidden="true">
+          <div class="mascot__halo"></div>
+          <div class="mascot__rings"><span></span><span></span><span></span></div>
+          <div class="mascot__shadow"></div>
+          <div class="mascot__float">
+            <div class="mascot__react">
+              <div class="mascot__body">
+                <div class="mascot__fill"></div>
+                <div class="mascot__caustic"></div>
+                <div class="mascot__core"></div>
+                <div class="mascot__wave"></div>
+                <div class="mascot__wave"></div>
+                <div class="mascot__sheen"></div>
+                <div class="mascot__iris"></div>
+                <div class="mascot__rim"></div>
+                <div class="mascot__spec"></div>
+              </div>
+              <div class="mascot__face"><i class="mascot__eye"></i><i class="mascot__eye"></i></div>
+              <div class="mascot__badge">
+                <svg data-badge="done" viewBox="0 0 24 24" stroke="var(--c-success)"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+                <svg data-badge="ask" viewBox="0 0 24 24" stroke="var(--c-attention)"><path d="M9.2 9a3 3 0 1 1 4.3 2.7c-.9.5-1.5 1.1-1.5 2.1v.4"/><path d="M12 18h.01"/></svg>
+                <svg data-badge="error" viewBox="0 0 24 24" stroke="var(--c-slate)"><path d="M12 7v6"/><path d="M12 17h.01"/></svg>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="status" id="status" role="status" aria-live="polite" aria-atomic="true">
+          <p class="status__eyebrow" id="status-eyebrow">Ready</p>
+          <h2 class="status__title" id="status-title" tabindex="-1">How can I help?</h2>
+          <p class="status__sub" id="status-sub">Tap the mic or press Space, then say what you need.</p>
+        </div>
+      </div>
+
+      <!-- Dock: one panel visible at a time, chosen by state -->
+      <div class="dock">
+
+        <div class="dock__panel" data-panel="idle">
+          <div class="voicebar">
+            <span class="wave wave--l" aria-hidden="true"><i style="--h:0.16;--k:0.5"></i><i style="--h:0.3;--k:0.8"></i><i style="--h:0.52;--k:1.0"></i><i style="--h:0.28;--k:0.7"></i><i style="--h:0.78;--k:1.1"></i><i style="--h:0.46;--k:0.9"></i><i style="--h:0.95;--k:1.2"></i><i style="--h:0.36;--k:0.6"></i></span>
+            <button class="mic" id="mic-btn" type="button" aria-label="Start listening">
+              <span class="mic__glass" aria-hidden="true"></span>
+              <svg class="mic__icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></svg>
+            </button>
+            <span class="wave wave--r" aria-hidden="true"><i style="--h:0.16;--k:0.5"></i><i style="--h:0.3;--k:0.8"></i><i style="--h:0.52;--k:1.0"></i><i style="--h:0.28;--k:0.7"></i><i style="--h:0.78;--k:1.1"></i><i style="--h:0.46;--k:0.9"></i><i style="--h:0.95;--k:1.2"></i><i style="--h:0.36;--k:0.6"></i></span>
+          </div>
+          <p class="hint"><kbd>Space</kbd> to talk · <button type="button" class="link" data-action="type">Type instead</button></p>
+        </div>
+
+        <div class="dock__panel" data-panel="listening" hidden>
+          <div class="transcript" id="transcript" aria-live="off">
+            <span class="transcript__text" id="transcript-text"></span><span class="transcript__caret" aria-hidden="true"></span>
+          </div>
+          <button class="recorder" id="stop-listen-btn" type="button" aria-label="Stop listening">
+            <canvas class="recorder__wave" id="recorder-wave" aria-hidden="true"></canvas>
+            <span class="recorder__time" id="recorder-time" aria-hidden="true">0:00</span>
+          </button>
+          <p class="hint">Pause when you're done, or tap the waveform to stop.</p>
+        </div>
+
+        <div class="dock__panel" data-panel="busy" hidden>
+          <div class="progress-pill">
+            <span class="spinner" aria-hidden="true"></span>
+            <span id="progress-text">Processing your request</span>
+          </div>
+          <button type="button" class="btn btn--ghost" data-action="stop">Stop</button>
+        </div>
+
+        <div class="dock__panel" data-panel="confirm" hidden>
+          <dl class="summary" id="summary" aria-label="Details to be submitted"></dl>
+          <div class="btn-row">
+            <button type="button" class="btn btn--quiet" id="cancel-btn" data-action="cancel">Cancel</button>
+            <button type="button" class="btn btn--primary" id="confirm-btn" data-action="confirm">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+              Submit
+            </button>
+          </div>
+          <p class="hint">Or say <q>yes</q> or <q>cancel</q>. Nothing is sent until you confirm.</p>
+        </div>
+
+        <div class="dock__panel" data-panel="ask" hidden>
+          <div class="chips" id="ask-options"></div>
+          <div class="btn-row btn-row--center">
+            <div class="voicebar voicebar--sm">
+              <span class="wave wave--l" aria-hidden="true"><i style="--h:0.16;--k:0.5"></i><i style="--h:0.3;--k:0.8"></i><i style="--h:0.52;--k:1.0"></i><i style="--h:0.28;--k:0.7"></i><i style="--h:0.78;--k:1.1"></i><i style="--h:0.46;--k:0.9"></i><i style="--h:0.95;--k:1.2"></i><i style="--h:0.36;--k:0.6"></i></span>
+              <button class="mic mic--sm" type="button" data-action="mic" aria-label="Answer by voice">
+                <span class="mic__glass" aria-hidden="true"></span>
+                <svg class="mic__icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></svg>
+              </button>
+              <span class="wave wave--r" aria-hidden="true"><i style="--h:0.16;--k:0.5"></i><i style="--h:0.3;--k:0.8"></i><i style="--h:0.52;--k:1.0"></i><i style="--h:0.28;--k:0.7"></i><i style="--h:0.78;--k:1.1"></i><i style="--h:0.46;--k:0.9"></i><i style="--h:0.95;--k:1.2"></i><i style="--h:0.36;--k:0.6"></i></span>
+            </div>
+          </div>
+          <p class="hint">Say your answer · <button type="button" class="link" data-action="type">Type instead</button></p>
+        </div>
+
+        <div class="dock__panel" data-panel="done" hidden>
+          <button type="button" class="btn btn--soft btn--wide" data-action="new">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></svg>
+            Start a new request
+          </button>
+        </div>
+
+        <div class="dock__panel" data-panel="error" hidden>
+          <div class="btn-row">
+            <button type="button" class="btn btn--quiet" data-action="type">Type instead</button>
+            <button type="button" class="btn btn--primary" data-action="retry">Try again</button>
+          </div>
+        </div>
+
+        <form class="type-box" id="type-box" hidden>
+          <label for="type-input" class="sr-only">Type your request</label>
+          <input id="type-input" type="text" autocomplete="off" placeholder="Type your request…">
+          <button type="submit" class="icon-btn icon-btn--send" aria-label="Send">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13"/><path d="M13 6l6 6-6 6"/></svg>
+          </button>
+        </form>
+      </div>
+
+      <details class="steps" id="steps" hidden>
+        <summary>
+          <span>Steps</span>
+          <span class="steps__count" id="steps-count">0</span>
+          <span class="steps__engine">Strands agent</span>
+        </summary>
+        <ol class="steps__list" id="steps-list"></ol>
+        <p class="steps__stats" id="strands-stats"></p>
+      </details>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/mascot.js"></script>
+  <script src="js/panel.js"></script>
+  <script src="js/demo.js"></script>
+  <script src="js/recorder.js"></script>
+  <script src="js/bridge.js"></script>
+  <script type="module" src="js/mascot-renderers.js"></script>
+</body>
+</html>

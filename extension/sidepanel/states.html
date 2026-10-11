@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voice Agent states</title>
+  <link rel="stylesheet" href="styles/tokens.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 32px 16px 48px;
+      background: var(--c-bg);
+      color: var(--c-text);
+      font-family: var(--font-sans);
+    }
+    header { max-width: 1520px; margin: 0 auto 24px; }
+    h1 { margin: 0; font-size: 22px; letter-spacing: -0.015em; }
+    p { margin: 6px 0 0; color: var(--c-text-2); }
+    .grid {
+      max-width: 1520px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 20px;
+    }
+    figure { margin: 0; }
+    figcaption { margin-bottom: 8px; font-size: 13px; font-weight: 600; color: var(--c-text-2); }
+    figcaption span { font-weight: 500; color: var(--c-text-3); }
+    iframe { width: 100%; height: 800px; border: 1px solid var(--c-hairline); border-radius: 20px; background: var(--c-bg); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Voice Agent states</h1>
+    <p>One component, eight states. Each frame is the live side panel opened with <code>?state=…</code>.</p>
+  </header>
+  <div class="grid">
+    <figure><figcaption>A · Idle <span>waiting for a request</span></figcaption><iframe title="Idle" src="sidepanel.html?state=idle"></iframe></figure>
+    <figure><figcaption>B · Listening <span>voice-reactive</span></figcaption><iframe title="Listening" src="sidepanel.html?state=listening"></iframe></figure>
+    <figure><figcaption>C · Thinking <span>planning tool calls</span></figcaption><iframe title="Thinking" src="sidepanel.html?state=thinking"></iframe></figure>
+    <figure><figcaption>D · Working <span>running browser actions</span></figcaption><iframe title="Working" src="sidepanel.html?state=working"></iframe></figure>
+    <figure><figcaption>E · Confirmation <span>human in the loop</span></figcaption><iframe title="Confirmation" src="sidepanel.html?state=confirm"></iframe></figure>
+    <figure><figcaption>F · Completed <span>only after the page reports success</span></figcaption><iframe title="Completed" src="sidepanel.html?state=done"></iframe></figure>
+    <figure><figcaption>G1 · Clarification <span>missing detail</span></figcaption><iframe title="Clarification" src="sidepanel.html?state=ask"></iframe></figure>
+    <figure><figcaption>G2 · Error <span>plain-language problem and next step</span></figcaption><iframe title="Error" src="sidepanel.html?state=error"></iframe></figure>
+  </div>
+</body>
+</html>
