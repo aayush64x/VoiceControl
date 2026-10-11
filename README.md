@@ -198,7 +198,7 @@ docs/               design brief, SSA questionnaire walkthrough, test log
 
 ## Team
 
-Built at Hack Midwest 2026 by **Aayush Nakarmi** and **Rylan**.
+Built at Hack Midwest 2026 by **Rylan Begaye**, **Aayush Nakarmi** and **Ari Lee**
 
 Side panel design: *Soft Glass Companion*, by our teammate.
 
