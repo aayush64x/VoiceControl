@@ -117,7 +117,8 @@ function connectWs() {
     if (msg.type === "agent_response") {
       cmdResult.textContent = msg.text;
       cmdResult.className = "";
-      speak(speakableReply(msg.text));
+      // Spoken only when the user asked ("read it out loud") or always-speak is on
+      speak(speakableReply(msg.text), msg.speak);
       return;
     }
 
@@ -248,15 +249,16 @@ function startMicIfShortcutOpenedPanel() {
 // --- Spoken replies ---
 const speakToggle = document.getElementById("speak-replies");
 try {
-  speakToggle.checked = localStorage.getItem("speakReplies") !== "off";
+  speakToggle.checked = localStorage.getItem("speakReplies") === "on";
 } catch {}
 speakToggle.addEventListener("change", () => {
   try { localStorage.setItem("speakReplies", speakToggle.checked ? "on" : "off"); } catch {}
   if (!speakToggle.checked) stopSpeaking();
 });
 
-function speak(text) {
-  if (!speakToggle.checked || !text || !window.speechSynthesis) return;
+// force: the user asked for this reply to be read aloud
+function speak(text, force = false) {
+  if (!(force || speakToggle.checked) || !text || !window.speechSynthesis) return;
   speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.rate = 1.05;
@@ -278,8 +280,8 @@ function speakableReply(text) {
     .replace(/\(element \d+\)/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (out.length > 350) {
-    const cut = out.slice(0, 350);
+  if (out.length > 1200) {
+    const cut = out.slice(0, 1200);
     const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
     out = end > 100 ? cut.slice(0, end + 1) : cut + "…";
   }
@@ -407,6 +409,7 @@ const stepsEl = document.getElementById("steps");
 const STEP_NAMES = {
   route: "Route",
   read_page: "Read page",
+  read_text: "Read text",
   act: "Act",
   fill_form: "Fill form",
   ask_user: "Ask you",

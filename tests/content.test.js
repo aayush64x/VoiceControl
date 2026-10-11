@@ -878,3 +878,49 @@ describe("waiting for the page (navigation and in-place updates)", () => {
     expect(doAction("back").navigated).toBe(true);
   });
 });
+
+describe("readMainText", () => {
+  const { readMainText } = content;
+  const visibleAll = () => document.querySelectorAll("*").forEach(makeVisible);
+
+  test("reads the main content and skips nav, header, footer and buttons", () => {
+    document.body.innerHTML = `
+      <header>Site header</header>
+      <nav><a href="/">Home</a></nav>
+      <main>
+        <h1>7-Day Forecast</h1>
+        <p>Tonight: Clear, low around 65.</p>
+        <p>Sunday: Sunny, high near 87.</p>
+        <button>Share</button>
+      </main>
+      <footer>Footer links</footer>`;
+    visibleAll();
+    const { text, truncated } = readMainText();
+    expect(text).toBe("7-Day Forecast\nTonight: Clear, low around 65.\nSunday: Sunny, high near 87.");
+    expect(truncated).toBe(false);
+  });
+
+  test("falls back to the body and skips hidden text", () => {
+    document.body.innerHTML = `<div><p>Visible fact.</p><p id="h">Hidden fact.</p></div>`;
+    visibleAll();
+    Object.defineProperty(document.getElementById("h"), "offsetParent", { get: () => null });
+    expect(readMainText().text).toBe("Visible fact.");
+  });
+
+  test("caps long pages at a sentence boundary and says it was cut", () => {
+    document.body.innerHTML = `<main>${Array.from({ length: 400 }, (_, i) => `<p>This is sentence ${i}.</p>`).join("")}</main>`;
+    visibleAll();
+    const { text, truncated } = readMainText(500);
+    expect(truncated).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(500);
+    expect(text.endsWith(".")).toBe(true);
+  });
+
+  test("doAction read_text returns title and text", () => {
+    document.title = "Forecast";
+    document.body.innerHTML = `<main><p>Hot.</p></main>`;
+    visibleAll();
+    const r = doAction("read_text");
+    expect(r).toMatchObject({ success: true, action: "read_text", title: "Forecast", text: "Hot." });
+  });
+});

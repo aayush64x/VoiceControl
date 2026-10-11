@@ -26,8 +26,11 @@ last_page = None
 # Actions that navigate wait on these so the agent never reads the old page.
 _page_loading_count = 0
 _page_ready_count = 0
+_loading = False      # a page started loading and hasn't announced itself yet
 NAV_START_WAIT = 1.5  # seconds to see any sign of navigation before assuming none happened
+NAV_START_WAIT_SUBMIT = 5.0  # forms often run code (lookups, validation) before navigating
 NAV_LOAD_WAIT = 8.0   # seconds to wait for the new page once it started loading
+UNREACHABLE = "Could not reach"  # prefix of the extension's "page not reachable" error
 
 on_user_input = None
 on_cancel = None  # set by agent.py — stops the running agent task
@@ -52,6 +55,18 @@ async def _send_to_client(obj):
         pass
 
 
+_SPEECH_REQUEST = re.compile(
+    r"\b(out loud|aloud|read (it|this|that|them)?\s*(to me|for me)|read (it|this|that) (out|to|for)|"
+    r"tell me out loud|say it|speak it)\b",
+    re.IGNORECASE,
+)
+
+
+def wants_speech(text):
+    """Replies are spoken only when the user asked: "read it out loud", "read this to me"."""
+    return bool(_SPEECH_REQUEST.search(text or ""))
+
+
 async def _run_command(text):
     try:
         if not on_user_input:
@@ -64,7 +79,7 @@ async def _run_command(text):
         print(f"[command] Running: {text}")
         result = await on_user_input(text)
         print(f"[command] Finished: {text}")
-        await _send_to_client({"type": "agent_response", "text": str(result)})
+        await _send_to_client({"type": "agent_response", "text": str(result), "speak": wants_speech(text)})
     except Exception as exc:
         print(f"[command] Error: {exc}")
         await _send_to_client({"type": "agent_response", "text": f"Error: {exc}"})
@@ -137,7 +152,7 @@ async def enqueue_command(text):
 
 
 async def handler(websocket):
-    global client, _transcriber, last_page, _page_loading_count, _page_ready_count
+    global client, _transcriber, last_page, _page_loading_count, _page_ready_count, _loading
     client = websocket
     print("[bridge] Extension connected")
     try:
@@ -198,10 +213,12 @@ async def handler(websocket):
                 pending[msg["id"]].set_result(msg.get("result"))
             elif msg_type == "page_loading":
                 _page_loading_count += 1
+                _loading = True
                 print(f"[bridge] Page loading: {msg.get('url', '?')}")
             elif msg_type == "page_ready":
                 last_page = msg
                 _page_ready_count += 1
+                _loading = False
                 print(f"[bridge] Page ready: {msg.get('title', '?')} ({msg.get('count', 0)} elements)")
     except websockets.ConnectionClosed:
         pass
@@ -254,8 +271,45 @@ async def send_command(msg_type, timeout=10.0, **kwargs):
         pending.pop(rid, None)
 
 
+async def wait_while_loading(timeout=None):
+    """If a page is mid-load, wait for it to finish before touching it.
+
+    Pages the extension can't run on (chrome://, PDFs) never announce
+    themselves, so give up after the timeout and carry on.
+    """
+    global _loading
+    if not _loading:
+        return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + (NAV_LOAD_WAIT if timeout is None else timeout)
+    start = loop.time()
+    while _loading and loop.time() < deadline:
+        await asyncio.sleep(0.05)
+    if _loading:
+        print("[bridge] page never finished loading — continuing anyway")
+        _loading = False
+    else:
+        print(f"[bridge] waited for page to finish loading ({(loop.time() - start) * 1000:.0f}ms)")
+
+
+def _remember_location(result):
+    """list_elements replies include the page title/URL — keep 'where the user is' current."""
+    global last_page
+    if isinstance(result, dict) and result.get("url"):
+        last_page = {**(last_page or {}), "title": result.get("title", ""), "url": result["url"]}
+
+
 async def list_elements():
-    return await send_command("list_elements")
+    await wait_while_loading()
+    result = await send_command("list_elements")
+    _remember_location(result)
+    return result
+
+
+async def read_text():
+    """Main readable text of the page (article, forecast, results) — not just its controls."""
+    await wait_while_loading()
+    return await send_command("action", action="read_text")
 
 
 async def ask_user(question, yes_no=False):
@@ -271,7 +325,7 @@ async def ask_user(question, yes_no=False):
         _question_rid = None
 
 
-async def wait_for_page(ready_before, loading_before):
+async def wait_for_page(ready_before, loading_before, start_wait=None):
     """After an action that may navigate, wait until the new page has loaded.
 
     Returns "loaded", "no_navigation" (nothing happened within NAV_START_WAIT —
@@ -287,7 +341,7 @@ async def wait_for_page(ready_before, loading_before):
         if _page_loading_count > loading_before:
             started = True
         elapsed = loop.time() - start
-        if not started and elapsed >= NAV_START_WAIT:
+        if not started and elapsed >= (NAV_START_WAIT if start_wait is None else start_wait):
             return "no_navigation"
         if elapsed >= NAV_LOAD_WAIT:
             return "slow"
@@ -302,12 +356,24 @@ async def do_action(action, element=None, value=None, submit=False):
         kwargs["value"] = value
     if submit:
         kwargs["submit"] = True
+    await wait_while_loading()
     ready_before, loading_before = _page_ready_count, _page_loading_count
     result = await send_command("action", **kwargs)
 
+    if isinstance(result, dict) and str(result.get("error", "")).startswith(UNREACHABLE) \
+            and (_loading or _page_loading_count > loading_before):
+        # The page was replaced while we were acting on it — not a real failure
+        await wait_while_loading()
+        print("[bridge] page changed mid-action")
+        return {"error": "A new page started loading before this action ran. Call read_page to see "
+                         "the new page, and repeat the action only if it is still needed."}
+
     if isinstance(result, dict) and result.get("navigated") and not result.get("error"):
         start = time.time()
-        page = await wait_for_page(ready_before, loading_before)
+        page = await wait_for_page(
+            ready_before, loading_before,
+            start_wait=NAV_START_WAIT_SUBMIT if result.get("submitted") else NAV_START_WAIT,
+        )
         result["page"] = page
         if page == "loaded" and last_page:
             result["page_title"] = last_page.get("title", "")

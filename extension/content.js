@@ -413,6 +413,50 @@ function getPageContext() {
   return { headings, errors };
 }
 
+// --- Page text (for "what's the forecast", "read this to me") ---
+// Stopgap until Rylan's readable.js lands: main content area, minus menus,
+// headers, footers and hidden text, capped so it fits in one model call.
+const TEXT_SKIP = "nav, header, footer, aside, script, style, noscript, svg, button, select, "
+  + "[aria-hidden='true'], [role='navigation'], [role='banner'], [role='contentinfo'], #voice-agent-overlays";
+const TEXT_BLOCKS = "p, li, h1, h2, h3, h4, h5, h6, td, th, dt, dd, div, section, article, blockquote, pre, tr, figcaption, label, legend";
+
+function readMainText(maxChars = 4000) {
+  const root = document.querySelector("article, main, [role='main']") || document.body;
+  const visibleCache = new Map();
+  const shown = (el) => {
+    if (!visibleCache.has(el)) visibleCache.set(el, isVisible(el));
+    return visibleCache.get(el);
+  };
+
+  const lines = [];
+  let current = "";
+  let lastBlock = null;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node.nodeValue.replace(/\s+/g, " ").trim();
+    const parent = node.parentElement;
+    if (!text || !parent || parent.closest(TEXT_SKIP) || !shown(parent)) continue;
+    const block = parent.closest(TEXT_BLOCKS);
+    if (block !== lastBlock && current) {
+      lines.push(current);
+      current = "";
+    }
+    lastBlock = block;
+    current += (current ? " " : "") + text;
+  }
+  if (current) lines.push(current);
+
+  let text = lines.filter((l, i) => l !== lines[i - 1]).join("\n");
+  let truncated = false;
+  if (text.length > maxChars) {
+    const cut = text.slice(0, maxChars);
+    const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("\n"));
+    text = (end > maxChars / 2 ? cut.slice(0, end + 1) : cut).trim();
+    truncated = true;
+  }
+  return { title: document.title, text, truncated };
+}
+
 // --- Fix 2: Every action reports back clearly ---
 function doAction(action, element, value, submit = false) {
   if (action === "scroll") {
@@ -432,6 +476,10 @@ function doAction(action, element, value, submit = false) {
     if (!value.startsWith("http")) value = "https://" + value;
     window.location.href = value;
     return { success: true, action: "open", url: value };
+  }
+
+  if (action === "read_text") {
+    return { success: true, action: "read_text", ...readMainText() };
   }
 
   if (action === "read") {
@@ -520,7 +568,7 @@ function doAction(action, element, value, submit = false) {
     return { success: true, action: "press_key", key: value };
   }
 
-  return { success: false, error: `Unknown action: "${action}". Valid: click, type, select, scroll, back, open, read, press_key.` };
+  return { success: false, error: `Unknown action: "${action}". Valid: click, type, select, scroll, back, open, read, read_text, press_key.` };
 }
 
 // --- Waiting for the page to settle ---
@@ -646,6 +694,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage 
       }
       const skipRescan = !result.success
         || message.action === "read"
+        || message.action === "read_text"
         || message.action === "scroll"
         || message.action === "back"
         || message.action === "open"
@@ -693,5 +742,5 @@ function resetForTest() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
+  module.exports = { readMainText, waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
 }

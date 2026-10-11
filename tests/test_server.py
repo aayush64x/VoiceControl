@@ -28,6 +28,7 @@ def reset_server_state():
     server._question_rid = None
     server._page_loading_count = 0
     server._page_ready_count = 0
+    server._loading = False
     yield
 
 
@@ -540,3 +541,59 @@ async def test_non_navigating_action_does_not_wait():
         task.cancel()
         await ws.close()
         assert "page" not in result
+
+
+def test_wants_speech_only_when_asked():
+    assert server.wants_speech("read it out loud for me")
+    assert server.wants_speech("read this to me")
+    assert server.wants_speech("read the article aloud")
+    assert not server.wants_speech("weather in Kansas City")
+    assert not server.wants_speech("read the page")
+
+
+@pytest.mark.asyncio
+async def test_actions_wait_while_a_page_is_loading(monkeypatch):
+    """A page that's mid-load is waited for before the next command touches it."""
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "page_loading", "url": "https://x.test/next"}))
+            await asyncio.sleep(0.05)
+            task = asyncio.create_task(server.list_elements())
+            await asyncio.sleep(0.3)
+            assert not task.done()  # still waiting for the page to finish
+            await ws.send(json.dumps({"type": "page_ready", "title": "Next", "url": "https://x.test/next", "count": 0}))
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+            assert msg["type"] == "list_elements"
+            await ws.send(json.dumps({"id": msg["id"], "result": {"elements": [], "count": 0, "title": "Next", "url": "https://x.test/next"}}))
+            await task
+            assert server.last_page["url"] == "https://x.test/next"
+
+
+@pytest.mark.asyncio
+async def test_page_that_never_loads_does_not_block_forever(monkeypatch):
+    monkeypatch.setattr(server, "NAV_LOAD_WAIT", 0.3)
+    server._loading = True
+    start = asyncio.get_running_loop().time()
+    await server.wait_while_loading()
+    assert asyncio.get_running_loop().time() - start < 1
+    assert server._loading is False
+
+
+@pytest.mark.asyncio
+async def test_unreachable_during_navigation_becomes_helpful_message():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+
+        async def on_action(ws, msg):
+            await ws.send(json.dumps({"type": "page_loading", "url": "https://x.test/b"}))
+            await ws.send(json.dumps({"id": msg["id"], "result": {"error": "Could not reach this page."}}))
+            await asyncio.sleep(0.1)
+            await ws.send(json.dumps({"type": "page_ready", "title": "B", "url": "https://x.test/b", "count": 0}))
+
+        ws, task = await _fake_extension(port, on_action)
+        result = await server.do_action("click", element=13)
+        task.cancel()
+        await ws.close()
+        assert "new page started loading" in result["error"]

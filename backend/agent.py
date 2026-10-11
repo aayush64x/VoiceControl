@@ -211,6 +211,23 @@ def read_page() -> str:
 
 
 @tool
+def read_text() -> str:
+    """Read the main text of the current page: article body, forecast, search results, form results.
+
+    read_page only lists buttons, links and fields. Use read_text when you need what the
+    page SAYS (temperatures, prices, article text, eligibility results), or when the user
+    asks you to read something aloud.
+    """
+    result = _bridge(server.read_text())
+    if not result or result.get("error"):
+        err = result.get("error", "no response") if result else "no response"
+        return f"Error reading page text: {err}"
+    text = result.get("text") or "(no readable text found)"
+    note = "\n[Text was cut off — this is the first part of the page.]" if result.get("truncated") else ""
+    return f"Text of '{result.get('title', '')}':\n{text}{note}"
+
+
+@tool
 def act(action: str, element: int = 0, value: str = "", submit: bool = False) -> str:
     """Perform one action on the page.
 
@@ -441,6 +458,12 @@ Efficiency rules:
 - Maximum 15 tool calls for ordinary tasks, 40 for filling a multi-page form or questionnaire. \
 If not done by then, report progress and stop.
 
+Reading rules:
+- read_page shows only controls (buttons, links, fields). To learn what the page SAYS \
+(weather, prices, article, results), call read_text.
+- If the user asks you to read something aloud / out loud / to them: get it with read_text, \
+then make your final reply the text to read — up to about 150 words of plain sentences.
+
 Action rules:
 - The first line "[You are on: …]" tells you the current page. Work on THAT page when it can do the \
 task (e.g. use its own search box). NEVER open the page you are already on.
@@ -512,7 +535,7 @@ def _get_agent(tier):
         _agents[tier] = Agent(
             model=BedrockModel(model_id=model_id, region_name="us-east-1"),
             system_prompt=_SYSTEM_PROMPT,
-            tools=[read_page, act, fill_form, ask_user],
+            tools=[read_page, read_text, act, fill_form, ask_user],
             memory_manager=_memory_manager,
         )
         _agents[tier].hooks.add_callback(BeforeToolCallEvent, _on_before_tool)
@@ -538,11 +561,11 @@ def classify(text):
     lower = text.strip().lower()
     if " and " in lower or "?" in lower:
         return "sonnet"
+    # Haiku only for clear one-step commands ("click the search button").
+    # Anything else goes to Sonnet: it takes fewer wrong turns, which is faster overall.
     for s in _SIMPLE_STARTS:
-        if lower.startswith(s):
+        if (lower == s or lower.startswith(s + " ")) and len(lower.split()) <= 6:
             return "haiku"
-    if len(lower.split()) <= 4:
-        return "haiku"
     return "sonnet"
 
 
@@ -629,6 +652,13 @@ async def process_input(text):
         "input": f"Strands agent · Claude {label} ({'quick task' if tier == 'haiku' else 'multi-step task'})",
         "status": "ok",
     })
+    # Ask the browser which page is open right now, so the agent works on the
+    # page the user is looking at (list_elements also records its title/URL).
+    # A failure here is fine — the agent just won't get the "You are on" line.
+    try:
+        await server.list_elements()
+    except Exception as exc:
+        print(f"[agent] couldn't check current page: {exc}")
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _run_agent, text, tier)
 
