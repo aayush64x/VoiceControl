@@ -383,10 +383,12 @@ async def do_action(action, element=None, value=None, submit=False, selector=Non
         # The page was replaced while we were acting on it — not a real failure
         await wait_while_loading()
         print("[bridge] page changed mid-action")
-        if action in ("search", "ask"):
-            # Submitting a search/question loaded the results page before the
-            # page script could reply — that's the search succeeding
-            return {"success": True, "action": action, "submitted": True, "navigated": True,
+        if action in ("search", "ask", "click"):
+            # The action itself loaded the next page (a search, or a Next/Submit
+            # button that reloads) before the page script could reply. Any page
+            # load already in progress was waited out before sending, so this
+            # one was caused by the action — it succeeded.
+            return {"success": True, "action": action, "submitted": action != "click", "navigated": True,
                     "page": "loaded", "page_title": (last_page or {}).get("title", "")}
         return {"error": "A new page started loading before this action ran. Call read_page to see "
                          "the new page, and repeat the action only if it is still needed."}

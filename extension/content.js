@@ -72,7 +72,8 @@ function getLabel(el) {
 }
 
 // The question a radio/checkbox answers, e.g. "Are you married?" for a "Yes" option.
-// Forms put it on a <fieldset><legend> or an ARIA radiogroup/group label.
+// Well-built forms put it on a <fieldset><legend> or an ARIA group label; many
+// hand-built ones (e.g. SSA) just put a <p> or heading above the options.
 function getGroupQuestion(el) {
   if (!isChoice(el)) return "";
   const fieldset = el.closest("fieldset");
@@ -82,8 +83,62 @@ function getGroupQuestion(el) {
   }
   const group = el.closest("[role='radiogroup'], [role='group']");
   if (group) {
-    const text = group.getAttribute("aria-label") || textOfIds(group.getAttribute("aria-labelledby"));
+    const text = group.getAttribute("aria-label") || textOfIds(group.getAttribute("aria-labelledby"))
+      || textOfIds(group.getAttribute("aria-describedby"));
     if (text) return cleanText(text);
+  }
+  return questionAboveGroup(el);
+}
+
+// The other options answering the same question as el
+function groupMembers(el) {
+  if (el.tagName === "INPUT" && el.name) {
+    const scope = el.form || document;
+    return Array.from(scope.querySelectorAll(`input[type="${el.type}"]`)).filter((o) => o.name === el.name);
+  }
+  if (el.tagName !== "INPUT" && el.parentElement) {
+    const role = el.getAttribute("role");
+    return Array.from(el.parentElement.querySelectorAll(`[role="${role}"]`));
+  }
+  return [el];
+}
+
+const QUESTION_TEXT = "p, h1, h2, h3, h4, h5, h6, legend, label, [role='heading'], span, div";
+
+// Fallback: walk up from the options; at each level, look at the text between
+// the previous form control (another question's options) and this group's
+// first option. Prefer a line ending in "?", else the first line — help text
+// usually sits between the question and the options.
+function questionAboveGroup(el) {
+  const members = groupMembers(el);
+  // A lone checkbox ("I agree") is labelled by its own text — don't borrow a paragraph
+  if (members.length < 2 && !(el.type === "radio" || el.getAttribute("role") === "radio")) return "";
+  const first = members[0];
+  const memberLabels = new Set(members.flatMap((m) => Array.from(m.labels || [])));
+  const isOptionText = (node) => members.some((m) => node.contains(m) || m.contains(node))
+    || Array.from(memberLabels).some((label) => label.contains(node) || node.contains(label));
+
+  // Smallest ancestor holding every option
+  let container = first.parentElement;
+  while (container && !members.every((m) => container.contains(m))) container = container.parentElement;
+
+  const before = (node) => node.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING;
+  for (let level = 0; container && level < 4; level++, container = container.parentElement) {
+    // Text before an earlier control belongs to an earlier question
+    const controls = Array.from(container.querySelectorAll("input, select, textarea, [role='radio'], [role='checkbox']"))
+      .filter((c) => !members.includes(c) && before(c));
+    const boundary = controls[controls.length - 1];
+    const lines = [];
+    for (const node of container.querySelectorAll(QUESTION_TEXT)) {
+      if (!before(node)) break; // reached the options
+      if (boundary && !(boundary.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+      if (isOptionText(node) || node.closest("#voice-agent-overlays")) continue;
+      // Only "leaf" text blocks — a wrapper div's text would include everything inside it
+      if (node.querySelector(QUESTION_TEXT)) continue;
+      const text = cleanText(node.textContent);
+      if (text.length >= 3 && text.length <= 200) lines.push(text);
+    }
+    if (lines.length) return lines.find((t) => t.endsWith("?")) || lines[0];
   }
   return "";
 }
@@ -398,6 +453,19 @@ function getPageContext() {
     return out;
   };
   const headings = collect("h1, h2, h3, legend, [role='heading']", 6);
+  // Questions written as plain text above their options (not real headings)
+  const askedBefore = new Set();
+  for (const choice of document.querySelectorAll("input[type='radio'], [role='radio']")) {
+    if (headings.length >= 8) break;
+    const key = choice.name || choice.parentElement;
+    if (askedBefore.has(key) || !visibleTarget(choice)) continue;
+    askedBefore.add(key);
+    const question = getGroupQuestion(choice);
+    if (question && !seen.has(question)) {
+      seen.add(question);
+      headings.push(question);
+    }
+  }
   const errors = collect(
     "[role='alert'], [aria-live='assertive'], .error, .error-message, .usa-error-message, .invalid-feedback, [class*='error-message'], [class*='errorMessage']",
     5,

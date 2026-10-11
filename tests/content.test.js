@@ -1032,3 +1032,83 @@ describe("site memory: finding a site's search box and chat box", () => {
     expect(info.keys.chat).toBe(null);
   });
 });
+
+describe("question text above radio groups (SSA-style markup, B4)", () => {
+  const { getGroupQuestion, getPageContext } = content;
+  const visibleAll = () => document.querySelectorAll("*").forEach(makeVisible);
+
+  test("SSA: <p> question in a container, radios in a sibling div", () => {
+    document.body.innerHTML = `
+      <div data-test="progress">13%</div>
+      <div data-test="question-container">
+        <p data-test="question-title">Have you ever worked and paid Social Security taxes?</p>
+        <div>
+          <input type="radio" id="y" name="worked"><label for="y">Yes</label>
+          <input type="radio" id="n" name="worked"><label for="n">No</label>
+        </div>
+      </div>
+      <button>Next</button>`;
+    visibleAll();
+    const radios = listElements().filter((e) => e.type === "radio");
+    expect(radios.map((r) => r.label)).toEqual([
+      "Have you ever worked and paid Social Security taxes? → Yes",
+      "Have you ever worked and paid Social Security taxes? → No",
+    ]);
+  });
+
+  test("help text between the question and the options doesn't replace the question", () => {
+    document.body.innerHTML = `
+      <div>
+        <p>Will the condition affect your ability to work for a year or more, or result in death?</p>
+        <p>A condition can be physical or mental.</p>
+        <div><label><input type="radio" name="year"> Yes</label><label><input type="radio" name="year"> No</label></div>
+      </div>`;
+    visibleAll();
+    expect(getGroupQuestion(document.querySelector("input"))).toBe(
+      "Will the condition affect your ability to work for a year or more, or result in death?");
+  });
+
+  test("several questions in one form: each gets its own question", () => {
+    document.body.innerHTML = `
+      <form>
+        <p>Are you married?</p>
+        <div><input type="radio" name="m" id="m1"><label for="m1">Yes</label><input type="radio" name="m" id="m2"><label for="m2">No</label></div>
+        <p>Do you have permanent kidney failure?</p>
+        <div><input type="radio" name="k" id="k1"><label for="k1">Yes</label><input type="radio" name="k" id="k2"><label for="k2">No</label></div>
+      </form>`;
+    visibleAll();
+    expect(getGroupQuestion(document.getElementById("m1"))).toBe("Are you married?");
+    expect(getGroupQuestion(document.getElementById("k2"))).toBe("Do you have permanent kidney failure?");
+  });
+
+  test("a lone checkbox doesn't borrow an unrelated paragraph", () => {
+    document.body.innerHTML = `<p>Welcome to our site.</p><div><input type="checkbox" id="c"><label for="c">I agree</label></div>`;
+    visibleAll();
+    expect(getGroupQuestion(document.getElementById("c"))).toBe("");
+    expect(listElements()[0].label).toBe("I agree");
+  });
+
+  test("fieldset legend still wins when present", () => {
+    document.body.innerHTML = `<p>Other text?</p><fieldset><legend>Are you a veteran?</legend>
+      <input type="radio" name="v" id="v1"><label for="v1">Yes</label><input type="radio" name="v" id="v2"><label for="v2">No</label></fieldset>`;
+    visibleAll();
+    expect(getGroupQuestion(document.getElementById("v1"))).toBe("Are you a veteran?");
+  });
+
+  test("custom role=radio options with text in a plain container", () => {
+    document.body.innerHTML = `
+      <div><span>What is the value of your resources?</span>
+        <div><div role="radio" aria-checked="false">$0 to $2,000</div><div role="radio" aria-checked="false">$2,001 to $17,220</div></div>
+      </div>`;
+    visibleAll();
+    expect(getGroupQuestion(document.querySelector("[role='radio']"))).toBe("What is the value of your resources?");
+  });
+
+  test("the question also appears in page headings for read_page", () => {
+    document.body.innerHTML = `
+      <h1>Eligibility</h1>
+      <div><p>Are you married?</p><div><input type="radio" name="m" id="a"><label for="a">Yes</label><input type="radio" name="m" id="b"><label for="b">No</label></div></div>`;
+    visibleAll();
+    expect(getPageContext().headings).toEqual(["Eligibility", "Are you married?"]);
+  });
+});

@@ -531,3 +531,55 @@ class TestLearnSkipsBrokenPages:
         monkeypatch.setattr(server, "send_command", send_command)
         asyncio.run(agent.learn_site({"url": "https://www.chadgpt.com/", "title": "WordPress › Error", "count": 0}))
         assert asked == [] and sites.get("chadgpt.com") == {}
+
+
+class TestFreshPageAfterActions:
+    """Actions that bring up a new page/question return it, saving a read_page step."""
+
+    def _fake(self, monkeypatch, action_result):
+        import agent
+        import server
+        calls = []
+
+        async def do_action(action, element=None, value=None, submit=False, selector=None):
+            calls.append(("action", action, element))
+            return dict(action_result(action, element))
+
+        async def list_elements():
+            calls.append(("list",))
+            return {"title": "Q2", "count": 1, "elements": [{"num": 3, "type": "radio", "label": "Are you married? → No", "value": ""}]}
+
+        monkeypatch.setattr(server, "do_action", do_action)
+        monkeypatch.setattr(server, "list_elements", list_elements)
+        monkeypatch.setattr(agent, "_bridge", lambda coro, timeout=15: asyncio_run(coro))
+        return agent, calls
+
+    def test_page_changed_rules(self):
+        from agent import _page_changed
+        assert _page_changed({"page": "loaded"}, "click")
+        assert _page_changed({"changed": True}, "click")                     # Next swapped the question
+        assert not _page_changed({"changed": True, "checked": True}, "click")  # just picked an answer
+        assert not _page_changed({"changed": True}, "type")
+        assert not _page_changed({"error": "x", "page": "loaded"}, "click")
+
+    def test_fill_form_with_next_returns_next_question(self, monkeypatch):
+        def result(action, element):
+            if element == 7:
+                return {"success": True, "label": "Yes", "checked": True, "changed": True}
+            return {"success": True, "label": "Next", "changed": True}
+
+        agent, calls = self._fake(monkeypatch, result)
+        out = agent.fill_form._tool_func([{"element": 7, "action": "click"}, {"element": 12, "action": "click"}]) \
+            if hasattr(agent.fill_form, "_tool_func") else agent.fill_form([{"element": 7, "action": "click"}, {"element": 12, "action": "click"}])
+        assert "Page now" in out and "Are you married? → No" in out
+        assert calls.count(("list",)) == 1
+
+    def test_radio_click_alone_does_not_reread(self, monkeypatch):
+        agent, calls = self._fake(monkeypatch, lambda a, e: {"success": True, "label": "Yes", "checked": True, "changed": True})
+        out = agent.act._tool_func("click", 7) if hasattr(agent.act, "_tool_func") else agent.act("click", 7)
+        assert "Page now" not in out and ("list",) not in calls
+
+
+def asyncio_run(coro):
+    import asyncio
+    return asyncio.run(coro)

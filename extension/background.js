@@ -28,14 +28,31 @@ function forwardToTab(message, sendResponse) {
     }
     const tabId = tabs[0].id;
     await ensureContentScript(tabId);
+    sendToTab(tabId, message, sendResponse);
+  });
+}
 
-    chrome.tabs.sendMessage(tabId, message, (response) => {
-      if (chrome.runtime.lastError) {
-        sendResponse({ error: UNREACHABLE });
-        return;
-      }
+// "Receiving end does not exist" means the message never arrived (the page
+// script wasn't ready — right after a load, or after Chrome put this worker
+// to sleep), so sending again is safe. Any other error means it may have
+// arrived, and retrying could click something twice — so never retry those.
+const NOT_DELIVERED = /Receiving end does not exist|Could not establish connection/i;
+
+function sendToTab(tabId, message, sendResponse, retried = false) {
+  chrome.tabs.sendMessage(tabId, message, (response) => {
+    const err = chrome.runtime.lastError;
+    if (!err) {
       sendResponse(response);
-    });
+      return;
+    }
+    if (!retried && NOT_DELIVERED.test(err.message || "")) {
+      setTimeout(async () => {
+        await ensureContentScript(tabId);
+        sendToTab(tabId, message, sendResponse, true);
+      }, 400);
+      return;
+    }
+    sendResponse({ error: UNREACHABLE });
   });
 }
 

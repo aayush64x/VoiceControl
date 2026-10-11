@@ -593,10 +593,29 @@ async def test_unreachable_during_navigation_becomes_helpful_message():
             await ws.send(json.dumps({"type": "page_ready", "title": "B", "url": "https://x.test/b", "count": 0}))
 
         ws, task = await _fake_extension(port, on_action)
-        result = await server.do_action("click", element=13)
+        result = await server.do_action("type", element=13, value="x")
         task.cancel()
         await ws.close()
         assert "new page started loading" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_click_that_reloads_the_page_counts_as_success():
+    """A Next button that reloads the page kills the page script before it replies."""
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+
+        async def on_action(ws, msg):
+            await ws.send(json.dumps({"type": "page_loading", "url": "https://x.test/q2"}))
+            await ws.send(json.dumps({"id": msg["id"], "result": {"error": "Could not reach this page."}}))
+            await asyncio.sleep(0.1)
+            await ws.send(json.dumps({"type": "page_ready", "title": "Question 2", "url": "https://x.test/q2", "count": 4}))
+
+        ws, task = await _fake_extension(port, on_action)
+        result = await server.do_action("click", element=9)
+        task.cancel()
+        await ws.close()
+        assert result["success"] and result["navigated"] and result["page_title"] == "Question 2"
 
 
 @pytest.mark.asyncio

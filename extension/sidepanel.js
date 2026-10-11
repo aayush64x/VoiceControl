@@ -120,7 +120,8 @@ function connectWs() {
     }
 
     if (msg.type === "agent_response") {
-      cmdResult.textContent = msg.text;
+      // Models sometimes reply in markdown; show plain text
+      cmdResult.textContent = (msg.text || "").replace(/\*\*(.+?)\*\*/g, "$1").replace(/^#{1,6}\s+/gm, "");
       cmdResult.className = "";
       // Spoken only when the user asked ("read it out loud") or always-speak is on
       speak(speakableReply(msg.text), msg.speak);
@@ -145,13 +146,7 @@ function connectWs() {
     }
 
     if (msg.type === "list_elements") {
-      chrome.runtime.sendMessage({ type: "list_elements" }, (response) => {
-        if (chrome.runtime.lastError) {
-          sendReply({ error: "Could not reach this page. It may still be loading, or it is a browser page the extension can't control." });
-          return;
-        }
-        sendReply(response);
-      });
+      sendToBackground({ type: "list_elements" }, sendReply);
     }
 
     if (msg.type === "action") {
@@ -168,15 +163,31 @@ function connectWs() {
         });
         return;
       }
-      chrome.runtime.sendMessage(msg, (response) => {
-        if (chrome.runtime.lastError) {
-          sendReply({ error: "Could not reach this page. It may still be loading, or it is a browser page the extension can't control." });
-          return;
-        }
-        sendReply(response);
-      });
+      sendToBackground(msg, sendReply);
     }
   };
+}
+
+// Relay a page command through the background worker. Chrome may have put the
+// worker to sleep (e.g. while the user took a minute to answer a question);
+// if the message never arrived, wake it and try once more. Messages that may
+// have arrived are never resent, so nothing is clicked twice.
+const NOT_DELIVERED = /Receiving end does not exist|Could not establish connection/i;
+const UNREACHABLE_MSG = "Could not reach this page. It may still be loading, or it is a browser page the extension can't control.";
+
+function sendToBackground(message, reply, retried = false) {
+  chrome.runtime.sendMessage(message, (response) => {
+    const err = chrome.runtime.lastError;
+    if (!err) {
+      reply(response);
+      return;
+    }
+    if (!retried && NOT_DELIVERED.test(err.message || "")) {
+      setTimeout(() => sendToBackground(message, reply, true), 400);
+      return;
+    }
+    reply({ error: UNREACHABLE_MSG });
+  });
 }
 
 function updateConnectionStatus() {

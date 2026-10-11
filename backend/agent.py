@@ -268,9 +268,9 @@ def act(action: str, element: int = 0, value: str = "", submit: bool = False) ->
     page = result.get("page")
     if page == "loaded":
         title = result.get("page_title")
-        parts.append(f"— new page loaded{f': {title!r}' if title else ''}. Call read_page to see it.")
+        parts.append(f"— new page loaded{f': {title!r}' if title else ''}.")
     elif page == "no_navigation":
-        parts.append("— no new page loaded (the page may have updated in place). Call read_page to check.")
+        parts.append("— no new page loaded (the page may have updated in place).")
     elif page == "slow":
         parts.append("— a new page is still loading. Call read_page; if it errors, try once more.")
     elif result.get("navigated"):
@@ -283,7 +283,29 @@ def act(action: str, element: int = 0, value: str = "", submit: bool = False) ->
         parts.append(f"— WARNING: {result['warning']}")
     if result.get("verified") is False:
         parts.append("— WARNING: value may not have been set correctly, verify with read_page")
+    if _page_changed(result, action):
+        return " ".join(parts) + _fresh_page_text()
     return " ".join(parts)
+
+
+def _page_changed(result, action):
+    """Did this action bring up a new page or new content (e.g. the next question)?
+
+    Selecting a radio/checkbox changes the page a little, but isn't worth a re-read.
+    """
+    if not isinstance(result, dict) or result.get("error"):
+        return False
+    if result.get("page") in ("loaded", "slow") or result.get("navigated"):
+        return True
+    return bool(result.get("changed")) and "checked" not in result and action in ("click", "select")
+
+
+def _fresh_page_text():
+    """The updated page, attached to an action's result — saves the agent a read_page step."""
+    listing = _bridge(server.list_elements())
+    if not listing or listing.get("error"):
+        return " Call read_page to see the page now."
+    return "\n\nPage now (already fresh — no need to call read_page):\n" + _format_page(listing)
 
 
 @tool
@@ -310,6 +332,7 @@ def fill_form(fields: list[dict]) -> str:
     ok_count = 0
     fail_count = 0
     lines = []
+    page_changed = False
 
     for i, field in enumerate(fields, 1):
         elem = field.get("element")
@@ -324,6 +347,7 @@ def fill_form(fields: list[dict]) -> str:
             fa = "click"
 
         result = _bridge(server.do_action(fa, element=elem, value=val), timeout=25)
+        page_changed = page_changed or _page_changed(result, fa)
 
         if not result or result.get("error"):
             err = result.get("error", "no response") if result else "no response"
@@ -338,7 +362,8 @@ def fill_form(fields: list[dict]) -> str:
     summary = f"Filled {ok_count}/{ok_count + fail_count} fields."
     if fail_count:
         summary += f" {fail_count} failed — read_page and check element numbers."
-    return summary + "\n" + "\n".join(lines)
+    text = summary + "\n" + "\n".join(lines)
+    return text + _fresh_page_text() if page_changed else text
 
 
 _CANCELLED_ANSWER = "The user gave a new command instead of answering. Stop this task now and take no further actions."
@@ -481,7 +506,8 @@ Action rules:
 task (e.g. use its own search box). NEVER open the page you are already on.
 - ALWAYS read_page before your first action.
 - After any navigation, call read_page — old element numbers are no longer valid.
-- Use element numbers from the LATEST read_page only.
+- Use element numbers from the LATEST read_page (or the latest "Page now" in an action result).
+- If an action result includes "Page now", that IS the current page — don't call read_page again.
 - If the command is just a topic or phrase (e.g. "Dark Souls 3"), search for it: on the \
 current site if it has a search box, otherwise on Google. Do not ask what to do.
 - To search the current site: act("search", 0, "query") — finds the site's search box and \
@@ -509,15 +535,17 @@ means the condition started after their 22nd birthday).
 - Split dates into the parts the form asks for (separate Month / Day / Year fields: 03, 14, 1985).
 - Multi-page forms and questionnaires (one question per page): answer AND click Next/Continue in ONE \
 fill_form call, e.g. fill_form([{"element": 7, "action": "click"}, {"element": 12, "action": "click"}]). \
-Then read_page for the next question. That is two steps per page — never more unless there is an error.
+The result then shows the next question ("Page now") — answer it right away. One step per page.
 - For dropdowns, use act("select", element, value).
 - For checkboxes and radio buttons, use act("click", element).
 - If a form asks for information NOT in memory, use ask_user to ask the user.
 - When the user provides new information, use add_memory to save it for next time.
 - ALWAYS ask_user before a FINAL submit that sends the user's data (Submit, Send, Apply, Sign up): \
 "Ready to submit. Should I go ahead?" Next/Continue between questionnaire pages is NOT a submit — don't ask.
-- When a questionnaire shows its results page, read the results to the user in 2-3 short sentences \
-(what they may be eligible for), then stop.
+- When a questionnaire shows its results page, call read_text and tell the user in 2-3 short \
+sentences what THE PAGE says they may be eligible for, then stop. Report ONLY what read_text shows — \
+never add benefits from saved details or your own knowledge, and don't list what the page says \
+they are NOT eligible for as if they were.
 - Fill as many fields as possible in one fill_form call.
 
 Output rules:
