@@ -904,6 +904,18 @@ function sendToExtension(message) {
   }
 }
 
+// --- F2 toggles listening (Chrome won't allow a lone function key as an
+// extension shortcut, so the page script listens for it). On a Mac that's
+// Fn+F2 unless the top row is set to standard function keys.
+const TOGGLE_KEY = "F2";
+
+function onToggleKey(e) {
+  if (e.key !== TOGGLE_KEY || e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
+  e.preventDefault();
+  sendToExtension({ type: "toggle_mic" });
+  return true;
+}
+
 // --- Fix 6: New page announces itself ---
 function announceReady() {
   // Background tabs loading must not look like "the page you're on changed"
@@ -927,6 +939,7 @@ function announceReady() {
 // --- Message listener (guard against double injection) ---
 if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage && !window._voiceAgentLoaded) {
   window._voiceAgentLoaded = true;
+  window.addEventListener("keydown", onToggleKey, true);
 
   if (chrome.storage && chrome.storage.local) {
     chrome.storage.local.get("showOverlays", (stored) => {
@@ -1037,5 +1050,5 @@ function resetForTest() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setOverlaysEnabled, findSearchBox, findChatBox, findKeyElements, stableSelector, resolveKeyElement, typeAndSubmit, readMainText, waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
+  module.exports = { onToggleKey, setOverlaysEnabled, findSearchBox, findChatBox, findKeyElements, stableSelector, resolveKeyElement, typeAndSubmit, readMainText, waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
 }

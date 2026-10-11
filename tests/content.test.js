@@ -1149,3 +1149,29 @@ describe("number tags on/off", () => {
     expect(tags()).toBe(1);
   });
 });
+
+describe("F2 toggles listening from any page", () => {
+  const { onToggleKey } = content;
+  const key = (k, extra = {}) => new KeyboardEvent("keydown", { key: k, cancelable: true, ...extra });
+
+  afterEach(() => { delete global.chrome; });
+
+  test("F2 tells the extension to toggle the mic", () => {
+    const sent = [];
+    global.chrome = { runtime: { sendMessage: (m) => { sent.push(m); return Promise.resolve(); } } };
+    const e = key("F2");
+    expect(onToggleKey(e)).toBe(true);
+    expect(e.defaultPrevented).toBe(true);
+    expect(sent).toEqual([{ type: "toggle_mic" }]);
+  });
+
+  test("other keys, held-down repeats and modifier combos are ignored", () => {
+    const sent = [];
+    global.chrome = { runtime: { sendMessage: (m) => { sent.push(m); return Promise.resolve(); } } };
+    expect(onToggleKey(key("F3"))).toBe(false);
+    expect(onToggleKey(key("F2", { repeat: true }))).toBe(false);
+    expect(onToggleKey(key("F2", { metaKey: true }))).toBe(false);
+    expect(onToggleKey(key("F2", { shiftKey: true }))).toBe(false);
+    expect(sent).toEqual([]);
+  });
+});

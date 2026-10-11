@@ -131,6 +131,13 @@
     else startRecording();
   }
 
+  // F2 toggles listening while the panel has focus (on web pages, the page script handles it)
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'F2' || e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    toggleMic();
+  });
+
   P.on('mic', startRecording);
   P.on('stopListening', () => stopRecording(true));
 

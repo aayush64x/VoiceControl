@@ -242,3 +242,14 @@ describe("question options without semicolons", () => {
     expect(chips()).toEqual([]);
   });
 });
+
+describe("F2 in the panel", () => {
+  test("toggles listening on and off", () => {
+    const { P, ws } = loadPanel();
+    ws.open();
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", cancelable: true, bubbles: true }));
+    expect(P.state).toBe("listening");
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", cancelable: true, bubbles: true }));
+    expect(ws.sent).toContainEqual({ type: "voice_stop", cancel: false });
+  });
+});
