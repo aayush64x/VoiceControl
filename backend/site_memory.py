@@ -10,6 +10,7 @@ Only page structure is stored (selectors, labels, a one-line summary) — never
 what the user typed or read.
 """
 
+import difflib
 import json
 import os
 import threading
@@ -114,6 +115,32 @@ def find_by_name(word):
             if key == name or key == domain or domain.split(".")[0] == key:
                 return domain
     return None
+
+
+def find_similar(word, cutoff=0.7):
+    """Domain whose remembered name sounds close to `word` — fixes voice mishearings
+    like "chad gpt" -> ChatGPT or "cloud" -> Claude, but only for sites already learned."""
+    key = "".join((word or "").lower().split())
+    if not key:
+        return None
+    exact = find_by_name(word)
+    if exact:
+        return exact
+    with _lock:
+        candidates = {}
+        for domain, entry in _load().items():
+            for name in ("".join((entry.get("name") or "").lower().split()), domain.split(".")[0]):
+                if name:
+                    candidates[name] = domain
+    match = difflib.get_close_matches(key, list(candidates), n=1, cutoff=cutoff)
+    return candidates[match[0]] if match else None
+
+
+def forget_site(domain):
+    """Drop everything learned about a site (e.g. a broken page learned by mistake)."""
+    with _lock:
+        if _load().pop(domain, None) is not None:
+            _save()
 
 
 def guess_domain(word):

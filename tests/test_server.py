@@ -597,3 +597,19 @@ async def test_unreachable_during_navigation_becomes_helpful_message():
         task.cancel()
         await ws.close()
         assert "new page started loading" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_open_new_tab_waits_for_the_new_page():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            task = asyncio.create_task(server.open_new_tab("https://claude.ai"))
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+            assert msg["type"] == "new_tab" and msg["url"] == "https://claude.ai"
+            await ws.send(json.dumps({"id": msg["id"], "result": {"success": True, "url": msg["url"]}}))
+            await asyncio.sleep(0.1)
+            await ws.send(json.dumps({"type": "page_ready", "title": "Claude", "url": "https://claude.ai/new", "count": 9}))
+            result = await asyncio.wait_for(task, timeout=3)
+            assert result["page"] == "loaded" and result["page_title"] == "Claude"

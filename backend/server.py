@@ -353,6 +353,17 @@ async def wait_for_page(ready_before, loading_before, start_wait=None):
         await asyncio.sleep(0.05)
 
 
+async def open_new_tab(url):
+    """Open url in a new tab (it becomes the active tab) and wait for it to load."""
+    ready_before, loading_before = _page_ready_count, _page_loading_count
+    result = await send_command("new_tab", url=url)
+    if isinstance(result, dict) and result.get("success"):
+        result["page"] = await wait_for_page(ready_before, loading_before, start_wait=NAV_START_WAIT_SUBMIT)
+        if result["page"] == "loaded" and last_page:
+            result["page_title"] = last_page.get("title", "")
+    return result
+
+
 async def do_action(action, element=None, value=None, submit=False, selector=None):
     kwargs = {"action": action}
     if selector:

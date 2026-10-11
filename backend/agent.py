@@ -82,27 +82,53 @@ def parse_site_command(text):
     return None
 
 
-def _site_url(word):
-    """URL for a site the user named: from site memory, else a domain guess."""
-    domain = site_memory.find_by_name(word) or site_memory.guess_domain(word)
-    return "https://" + domain
+_URLISH = re.compile(r"^(https?://\S+|[\w-]+(\.[\w-]+)*\.[a-z]{2,}(/\S*)?)$", re.IGNORECASE)
+
+
+def _known_site_url(name):
+    """URL for a site the user named — only if it's an address or a site we've learned.
+
+    Unknown names return None so the AI resolves them: it knows "Claude" is
+    claude.ai and can see through voice mishearings ("Chad GPT"), where a
+    blind name.com guess lands on junk (chadgpt.com).
+    """
+    name = (name or "").strip()
+    if not name:
+        return None
+    if _URLISH.match(name.replace(" ", "")) and "." in name:
+        return name if name.lower().startswith("http") else "https://" + name.replace(" ", "")
+    domain = site_memory.find_similar(name)
+    return "https://" + domain if domain else None
+
+
+# "new tab", "new tab youtube", "open youtube in a new tab", "open a new tab with weather.gov"
+_NEW_TAB_PATTERNS = [
+    re.compile(r"^(?:open\s+)?(?:a\s+)?new\s+tab(?:\s+(?:with|for|to|and open|and go to)?\s*(.*))?$", re.IGNORECASE),
+    re.compile(r"^(?:open|go to|launch|load)?\s*(.+?)\s+(?:in|on|into)\s+(?:a\s+)?new\s+tab$", re.IGNORECASE),
+]
+
+
+def _parse_new_tab(text):
+    """Return the target ("" for a blank new tab) if this is a new-tab command, else None."""
+    for pattern in _NEW_TAB_PATTERNS:
+        m = pattern.match(text)
+        if m:
+            return (m.group(1) or "").strip()
+    return None
 
 
 def try_direct(text):
     stripped = text.strip().rstrip(".!")
 
-    # "new tab" commands
-    m = re.match(r"^new\s+tab(?:\s+(.+))?$", stripped, re.IGNORECASE)
-    if m:
-        target = (m.group(1) or "").strip().lower()
+    # New tab: instant for a blank tab, an address, or a site already learned.
+    # Anything else (an unknown or misheard name) goes to the AI, which has
+    # its own new_tab action.
+    target = _parse_new_tab(stripped)
+    if target is not None:
         if not target:
             return ("new_tab", None, "https://google.com")
-        if re.match(r"^(https?://\S+|[\w.-]+\.\w{2,})$", target):
-            url = target if target.startswith("http") else "https://" + target
-            return ("new_tab", None, url)
-        if re.match(r"^[a-z0-9-]+$", target):
-            return ("new_tab", None, _site_url(target))
-        return None
+        url = _known_site_url(target)
+        return ("new_tab", None, url) if url else None
 
     for pattern, extract in _DIRECT_PATTERNS:
         m = re.match(pattern, stripped, re.IGNORECASE)
@@ -164,9 +190,10 @@ def read_page() -> str:
         # element numbers clicks the wrong things.
         err = result.get("error", "unknown") if result else "no response"
         return (
-            f"Error reading page: {err} The page may still be loading, or it is a browser page "
-            "the extension can't control (chrome://, Web Store, PDF). Wait and try once more, "
-            "or open a normal website."
+            f"Error reading page: {err} The page may still be loading, it may have FAILED to load "
+            "(the address doesn't exist), or it is a browser page the extension can't control "
+            "(chrome://, Web Store, PDF). Try read_page once more; if it still fails, don't keep "
+            "acting on this page — go back or open a different, well-known address."
         )
     return _format_page(result)
 
@@ -193,7 +220,7 @@ def act(action: str, element: int = 0, value: str = "", submit: bool = False) ->
     """Perform one action on the page.
 
     Args:
-        action: click, type, select, scroll, back, open, read, press_key,
+        action: click, type, select, scroll, back, open, new_tab, read, press_key,
             search (finds the site's search box itself — no element needed),
             ask (types into a chat assistant's message box and sends — no element needed)
         element: Element number from read_page (required for click/type/select)
@@ -208,6 +235,7 @@ def act(action: str, element: int = 0, value: str = "", submit: bool = False) ->
         act("select", 5, "Missouri")                — choose dropdown option
         act("scroll", 0, "down")                    — scroll page down
         act("back")                                 — go back
+        act("new_tab", 0, "https://claude.ai")      — open a site in a NEW tab
         act("search", 0, "cat videos")              — search this site
         act("ask", 0, "What is the biggest animal?") — send a message in a chat app
         act("open", 0, "https://weather.gov")       — navigate to URL
@@ -215,6 +243,15 @@ def act(action: str, element: int = 0, value: str = "", submit: bool = False) ->
     elem = element if element > 0 else None
     val = value if value else None
     # Actions that load a new page wait for it (up to ~10s), so allow longer than usual
+    if action == "new_tab":
+        if not val:
+            return "Error: new_tab needs a URL as the value."
+        url = val if val.startswith("http") else "https://" + val
+        result = _bridge(server.open_new_tab(url), timeout=25)
+        if not result or result.get("error"):
+            return f"Error: {(result or {}).get('error', 'no response')}"
+        title = result.get("page_title")
+        return f"Done: opened a NEW TAB at {url}" + (f" — loaded {title!r}." if title else ". It may still be loading.")
     if action in ("search", "ask"):
         result = _bridge(_site_action(action, val), timeout=25)
     else:
@@ -432,6 +469,13 @@ Reading rules:
 - If the user asks you to read something aloud / out loud / to them: get it with read_text, \
 then make your final reply the text to read — up to about 150 words of plain sentences.
 
+New tabs and site names:
+- If the user says "new tab" (e.g. "open Claude in a new tab"), use act("new_tab", 0, url). \
+act("open") replaces the CURRENT tab — it is not a new tab.
+- Voice commands can mishear names. Pick the well-known site that SOUNDS like what was said: \
+"Chad GPT" / "chat GBT" → ChatGPT (chatgpt.com), "Cloud" / "Clawed" → Claude (claude.ai), \
+"Cloud Code" → Claude Code. Never open a made-up domain built from a misheard name.
+
 Action rules:
 - The first line "[You are on: …]" tells you the current page. Work on THAT page when it can do the \
 task (e.g. use its own search box). NEVER open the page you are already on.
@@ -484,6 +528,7 @@ only use ask_user when you truly cannot continue (e.g. missing form data).
 - Your final reply is READ ALOUD: 1-2 short sentences, no lists, no markdown. \
 E.g. "Kansas City: clear and 72 degrees, high of 90 tomorrow." or "Searched YouTube for cat videos."
 - If you cannot complete the task, say what you tried and stop.
+- NEVER claim something a tool didn't do (e.g. "opened in a new tab" after a normal open).
 """
 
 _agents = {}
@@ -567,6 +612,12 @@ async def learn_site(page):
     domain = site_memory.domain_of(page.get("url"))
     if not domain:
         return
+    # Don't learn error pages ("WordPress › Error", 404s, empty pages) as if they were the site
+    broken = page.get("count", 1) == 0 or re.search(r"\b(error|not found|404|can.t be reached)\b",
+                                                     page.get("title") or "", re.IGNORECASE)
+    if broken:
+        print(f"[sites] not learning {domain}: looks like an error page ({page.get('title')!r})")
+        return
     if domain not in _learning and site_memory.needs_learning(domain):
         _learning.add(domain)
         if not site_memory.get(domain):
@@ -615,7 +666,9 @@ async def _run_site_command(cmd):
     """
     current = site_memory.domain_of((server.last_page or {}).get("url"))
     if cmd["site"]:
-        target = site_memory.find_by_name(cmd["site"]) or site_memory.guess_domain(cmd["site"])
+        target = site_memory.find_similar(cmd["site"])
+        if not target:
+            return None  # not learned yet — the AI knows where "etsy" or "Claude" lives
         if target != current:
             _emit({"type": "step", "tool": "act", "input": f"open {target}", "status": "running", "step_id": "site-open"})
             opened = await server.do_action("open", value="https://" + target)
@@ -701,10 +754,11 @@ async def _run_direct(text):
             return "\n".join(lines)
         return f"Error: {result}"
     if action == "new_tab":
-        result = await server.send_command("new_tab", url=value)
+        result = await server.open_new_tab(value)
         if result and result.get("success"):
-            return f"Opened new tab: {value}"
-        return f"Error: {result}"
+            title = result.get("page_title")
+            return f"Opened {title or value} in a new tab."
+        return f"Couldn't open a new tab: {(result or {}).get('error', 'no response')}"
     result = await server.do_action(action, element=element, value=value)
     if result and result.get("success") and action == "open":
         return f"Opened {value}"

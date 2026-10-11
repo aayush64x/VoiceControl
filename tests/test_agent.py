@@ -72,12 +72,7 @@ class TestTryDirect:
     def test_new_tab_bare(self):
         assert try_direct("new tab") == ("new_tab", None, "https://google.com")
 
-    def test_new_tab_shortcut(self):
-        assert try_direct("new tab youtube") == ("new_tab", None, "https://youtube.com")
 
-    def test_new_tab_twitter(self):
-        # No site list any more: unknown names become name.com (twitter.com redirects to x.com)
-        assert try_direct("new tab twitter") == ("new_tab", None, "https://twitter.com")
 
     def test_new_tab_url(self):
         assert try_direct("new tab weather.gov") == ("new_tab", None, "https://weather.gov")
@@ -85,11 +80,7 @@ class TestTryDirect:
     def test_new_tab_full_url(self):
         assert try_direct("new tab https://example.com") == ("new_tab", None, "https://example.com")
 
-    def test_new_tab_unknown_word(self):
-        assert try_direct("new tab something random") is None
 
-    def test_new_tab_case_insensitive(self):
-        assert try_direct("New Tab YouTube") == ("new_tab", None, "https://youtube.com")
 
 
 class TestClassify:
@@ -274,17 +265,21 @@ class TestInstantPath:
         assert out == "Searched YouTube for cat videos."
         assert calls == [("search", "cat videos", "#search")]
 
-    def test_named_site_opens_it_first(self, sites, monkeypatch):
+    def test_unknown_named_site_goes_to_ai(self, sites, monkeypatch):
         import asyncio
+        agent, calls = self._fake(monkeypatch, "https://www.google.com/", lambda *a: {"success": True})
+        assert asyncio.run(agent._run_site_command(parse_site_command("search wooden ramps on etsy"))) is None
+        assert calls == []  # no blind etsy.com guess
+
+    def test_learned_named_site_opens_it_first(self, sites, monkeypatch):
+        import asyncio
+        sites.remember_profile("etsy.com", {"name": "Etsy", "type": "shopping"})
         agent, calls = self._fake(monkeypatch, "https://www.google.com/",
                                   lambda a, v, sel: {"success": True, "selector": "input[name=\"q\"]"})
         out = asyncio.run(agent._run_site_command(parse_site_command("search wooden ramps on etsy")))
         assert calls[0] == ("open", "https://etsy.com", None)
         assert calls[1][0] == "search"
-        assert "etsy" in out.lower()
-        # What worked is remembered for next time
-        import server
-        server.last_page = {"url": "https://etsy.com/"}
+        assert out == "Searched Etsy for wooden ramps."
 
     def test_play_hands_off_to_agent_to_open_video(self, sites, monkeypatch):
         import asyncio
@@ -475,3 +470,64 @@ class TestLearnSite:
 
         monkeypatch.setattr(agent.boto3, "client", lambda *a, **k: Boom())
         assert agent._profile_site("x.com", {"title": "X"}) == {"name": "X", "type": "other"}
+
+
+class TestNewTab:
+    """'new tab' in all its phrasings; only addresses and learned sites are instant."""
+
+    def test_phrasings_with_an_address(self, sites):
+        for text in ["new tab weather.gov", "open weather.gov in a new tab", "weather.gov in new tab",
+                     "open a new tab with weather.gov", "Open weather.gov on new tab."]:
+            assert try_direct(text) == ("new_tab", None, "https://weather.gov"), text
+
+    def test_blank_new_tab(self, sites):
+        assert try_direct("new tab") == ("new_tab", None, "https://google.com")
+        assert try_direct("open a new tab") == ("new_tab", None, "https://google.com")
+
+    def test_learned_site_by_name(self, sites):
+        sites.remember_profile("youtube.com", {"name": "YouTube", "type": "video"})
+        assert try_direct("New Tab YouTube") == ("new_tab", None, "https://youtube.com")
+        assert try_direct("open youtube in a new tab") == ("new_tab", None, "https://youtube.com")
+
+    def test_misheard_name_matches_learned_site(self, sites):
+        sites.remember_profile("chatgpt.com", {"name": "ChatGPT", "type": "chat assistant"})
+        sites.remember_profile("claude.ai", {"name": "Claude", "type": "chat assistant"})
+        assert try_direct("open Chad GPT in new tab") == ("new_tab", None, "https://chatgpt.com")
+        assert try_direct("open Cloud in new tab") == ("new_tab", None, "https://claude.ai")
+
+    def test_unknown_name_goes_to_ai_not_a_guess(self, sites):
+        # The bug: "Chad GPT" became chadgpt.com. Unknown names now go to the AI.
+        assert try_direct("open Chad GPT in new tab") is None
+        assert try_direct("new tab twitter") is None
+
+    def test_not_a_new_tab_command(self, sites):
+        assert try_direct("close this tab") is None
+
+
+class TestSiteMemoryFuzzy:
+    def test_find_similar(self, sites):
+        sites.remember_profile("chatgpt.com", {"name": "ChatGPT"})
+        assert sites.find_similar("chad gpt") == "chatgpt.com"
+        assert sites.find_similar("chat gbt") == "chatgpt.com"
+        assert sites.find_similar("netflix") is None
+
+    def test_forget_site(self, sites):
+        sites.remember_profile("chadgpt.com", {"name": "ChadGPT", "type": "other"})
+        sites.forget_site("chadgpt.com")
+        assert sites.get("chadgpt.com") == {}
+
+
+class TestLearnSkipsBrokenPages:
+    def test_error_page_not_learned(self, sites, monkeypatch):
+        import asyncio
+        import agent
+        import server
+        asked = []
+
+        async def send_command(msg_type, **kw):
+            asked.append(kw)
+            return {}
+
+        monkeypatch.setattr(server, "send_command", send_command)
+        asyncio.run(agent.learn_site({"url": "https://www.chadgpt.com/", "title": "WordPress › Error", "count": 0}))
+        assert asked == [] and sites.get("chadgpt.com") == {}
