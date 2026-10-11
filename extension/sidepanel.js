@@ -148,7 +148,8 @@ function connectWs() {
     }
 
     if (msg.type === "ask_user") {
-      speak(msg.question + (msg.yes_no ? " Say yes or no." : ""));
+      // Form questions are always read aloud, so the user can answer without looking
+      speak(msg.question + (msg.yes_no ? " Say yes or no." : ""), true);
       showQuestion(msg.question, msg.yes_no, (answer) => {
         sendReply({ answer });
       });

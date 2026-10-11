@@ -23,15 +23,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 import server
 import site_memory
-from memory_store import LocalMemoryStore
-from strands.memory import MemoryManager
 
-_memory_store = LocalMemoryStore()
-_memory_manager = MemoryManager(
-    stores=[_memory_store],
-    add_tool_config=True,
-    injection=True,
-)
+# No personal details are ever stored: a household may have more than one
+# person using this, so every form task asks fresh. Answers live only in the
+# agent's conversation for the current task and are wiped when it ends.
 
 _server_loop = None
 
@@ -415,7 +410,8 @@ _CANCELLED_ANSWER = "The user gave a new command instead of answering. Stop this
 def ask_user(question: str, yes_no: bool = False) -> str:
     """Ask the user a question and wait for their answer.
 
-    Use this when you need information that is NOT in the saved user details.
+    Nothing about the user is saved, so this is how you get every personal detail a
+    form needs. The question is shown in the side panel AND read aloud.
     For yes/no questions (like "Should I submit this form?"), set yes_no=True.
 
     Args:
@@ -527,7 +523,7 @@ Efficiency rules:
 - Take the SHORTEST path. Use search boxes instead of browsing menus.
 - Combine multiple field fills into one fill_form call.
 - Do NOT go back and retry more than once. If stuck, say so and stop.
-- Maximum 15 tool calls for ordinary tasks, 40 for filling a multi-page form or questionnaire. \
+- Maximum 15 tool calls for ordinary tasks, 60 for filling a multi-page form or questionnaire. \
 If not done by then, report progress and stop.
 
 Reading rules:
@@ -568,27 +564,41 @@ Self-correction rules:
 - Never claim a task is complete without verifying the page shows the expected result.
 
 Form filling rules:
-- Use search_memory ONCE at the start to load all saved user details. Don't search again for each question.
-- Match form labels to remembered details by meaning (e.g. "First Name" matches remembered first name).
+- You have NO saved information about the user — nothing carries over between tasks, on purpose \
+(several people may share this browser). NEVER guess or invent personal details: ask with ask_user.
+- Within THIS task, remember every answer the user gives and reuse it; never ask the same thing twice \
+(e.g. their name on page 1 and again on page 4). Work out what follows from earlier answers (a birth \
+date gives their age), but ask if unsure.
+- The user hears your questions read aloud and answers by voice. Keep each question short and plain.
+
+One-page forms (all fields visible at once):
+- First look over ALL the fields. Then ask for what's needed in a few questions of AT MOST 3 items each, \
+e.g. ask_user("For this form I need your first name, last name, and phone number."). The user's reply \
+may contain all three — split it up yourself; only re-ask for an item that's missing or unclear.
+- Fill everything in ONE fill_form call. Split dates into the parts the form asks for \
+(separate Month / Day / Year fields: 03, 14, 1985).
+- Before the final submit, read back a short summary and ask yes/no: \
+ask_user("I'll submit: Jordan Rivera, 816-555-0142, Tuesday morning. Should I submit?", yes_no=True).
+
+Questionnaires (one question per page, e.g. eligibility checkers):
+- You can't see later questions (they depend on earlier answers), so go page by page.
+- Ask the page's question as written, with its options: ask_user("Are you married? Yes; Yes, but we \
+don't live together; No, I'm widowed or divorced; or No, I've never been married."). For plain \
+yes/no questions set yes_no=True. Don't ask what you already know from this task.
 - Radio buttons and checkboxes are shown as "Question → Answer" (e.g. "Are you married? → No"). \
-Pick the option whose question AND answer match the user's details.
-- Work out answers from saved details when you can (e.g. a 1985 birth date and a 2021 condition start \
-means the condition started after their 22nd birthday).
-- Split dates into the parts the form asks for (separate Month / Day / Year fields: 03, 14, 1985).
-- Multi-page forms and questionnaires (one question per page): answer AND click Next/Continue in ONE \
-fill_form call, e.g. fill_form([{"element": 7, "action": "click"}, {"element": 12, "action": "click"}]). \
-The result then shows the next question ("Page now") — answer it right away. One step per page.
-- For dropdowns, use act("select", element, value).
-- For checkboxes and radio buttons, use act("click", element).
-- If a form asks for information NOT in memory, use ask_user to ask the user.
-- When the user provides new information, use add_memory to save it for next time.
-- ALWAYS ask_user before a FINAL submit that sends the user's data (Submit, Send, Apply, Sign up): \
-"Ready to submit. Should I go ahead?" Next/Continue between questionnaire pages is NOT a submit — don't ask.
+Match the user's spoken reply to an option by meaning ("never married" → "No, I've never been married").
+- Answer AND click Next/Continue in ONE fill_form call, e.g. \
+fill_form([{"element": 7, "action": "click"}, {"element": 12, "action": "click"}]). \
+The result shows the next question ("Page now") — ask it right away.
+- Next/Continue between questionnaire pages is NOT a submit — don't ask permission for it.
 - When a questionnaire shows its results page, call read_text and tell the user in 2-3 short \
 sentences what THE PAGE says they may be eligible for, then stop. Report ONLY what read_text shows — \
-never add benefits from saved details or your own knowledge, and don't list what the page says \
-they are NOT eligible for as if they were.
-- Fill as many fields as possible in one fill_form call.
+never add anything from your own knowledge, and don't list what the page says they are NOT eligible \
+for as if they were.
+
+Field types:
+- Dropdowns: act("select", element, value). Checkboxes and radio buttons: act("click", element).
+- ALWAYS ask_user before a FINAL submit that sends the user's data (Submit, Send, Apply, Sign up).
 
 Output rules:
 - NEVER answer from your own knowledge. You are not a chatbot.
@@ -614,7 +624,6 @@ def _get_agent(tier):
             model=BedrockModel(model_id=model_id, region_name="us-east-1"),
             system_prompt=_SYSTEM_PROMPT,
             tools=[read_page, read_text, act, fill_form, ask_user],
-            memory_manager=_memory_manager,
         )
         _agents[tier].hooks.add_callback(BeforeToolCallEvent, _on_before_tool)
         _agents[tier].hooks.add_callback(AfterToolCallEvent, _on_after_tool)
@@ -878,7 +887,7 @@ def _run_agent(text, tier):
     global _running_agent
     agent = _get_agent(tier)
     # Each command starts fresh: old page listings would bloat every request and
-    # confuse element numbers. Saved user details live in memory, not history.
+    # confuse element numbers. Nothing about the user carries over between tasks.
     agent.messages.clear()
     _running_agent = agent
     try:

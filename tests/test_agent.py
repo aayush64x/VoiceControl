@@ -127,30 +127,6 @@ class TestClassify:
         assert classify("fill out my disability benefits application") == "sonnet"
 
 
-class TestUserDetailsFile:
-    def test_seed_file_exists(self):
-        path = os.path.join(os.path.dirname(__file__), "..", "backend", "user_details.json")
-        assert os.path.exists(path)
-
-    def test_seed_file_has_required_fields(self):
-        path = os.path.join(os.path.dirname(__file__), "..", "backend", "user_details.json")
-        with open(path) as f:
-            details = json.load(f)
-        required = [
-            "first_name", "last_name", "date_of_birth", "email", "phone",
-            "address", "city", "state", "zip", "disability_type",
-        ]
-        for field in required:
-            assert field in details, f"Missing field: {field}"
-
-    def test_seed_file_values(self):
-        path = os.path.join(os.path.dirname(__file__), "..", "backend", "user_details.json")
-        with open(path) as f:
-            details = json.load(f)
-        assert details["first_name"] == "Jordan"
-        assert details["last_name"] == "Rivera"
-
-
 class TestParseSiteCommand:
     """"search / play / ask X" commands — what to do, not which site's URL."""
 
@@ -342,20 +318,6 @@ class TestFormatPage:
         from agent import _format_page
         out = _format_page({"title": "T", "count": 0, "elements": []})
         assert "Headings" not in out and "ERRORS" not in out
-
-
-class TestSeededDetails:
-    def test_ssa_answers_seeded_and_marital_status_left_out(self, tmp_path):
-        import asyncio
-        from memory_store import LocalMemoryStore
-        store = LocalMemoryStore(str(tmp_path))
-        asyncio.run(store.initialize())
-        keys = asyncio.run(store._storage.list())
-        assert "worked_and_paid_social_security_taxes" in keys
-        assert "permanent_kidney_failure" in keys
-        assert not any("married" in k or "marital" in k for k in keys)
-        text = asyncio.run(store._storage.read("permanent_kidney_failure")).decode()
-        assert text == "The user does not have permanent kidney failure"
 
 
 class TestStepStream:
