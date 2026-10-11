@@ -55,7 +55,7 @@ function mountSpline() {
     wrap.className = 'mascot__spline';
     const frame = document.createElement('iframe');
     frame.src = SPLINE_URL;
-    frame.title = 'Voice Agent mascot';
+    frame.title = 'VOYA mascot';
     frame.setAttribute('aria-hidden', 'true');
     frame.tabIndex = -1;
     frame.loading = 'eager';

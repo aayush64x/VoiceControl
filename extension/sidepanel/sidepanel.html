@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Voice Agent</title>
+  <title>VOYA</title>
   <link rel="stylesheet" href="styles/tokens.css">
   <link rel="stylesheet" href="styles/mascot.css">
   <link rel="stylesheet" href="styles/panel.css">
@@ -25,11 +25,11 @@
       <header class="card__header">
         <div class="brand">
           <span class="brand__dot" aria-hidden="true"></span>
-          <h1 id="brand-name" class="brand__name">Voice Agent</h1>
+          <h1 id="brand-name" class="brand__name">VOYA</h1>
         </div>
         <div class="header__right">
           <span class="conn" id="conn" data-conn="offline"><span class="conn__dot" aria-hidden="true"></span><span class="conn__label">Offline</span></span>
-          <button class="power" id="power-btn" type="button" role="switch" aria-checked="true" aria-label="Voice Agent">
+          <button class="power" id="power-btn" type="button" role="switch" aria-checked="true" aria-label="VOYA on or off">
             <span class="power__track" aria-hidden="true"><span class="power__thumb"></span></span>
             <span class="power__label" aria-hidden="true">On</span>
           </button>
@@ -161,10 +161,42 @@
         </div>
       </div>
 
-      <!-- Dock: one panel visible at a time, chosen by state -->
+      <!-- Dock: ONE button that does everything. Pressing it always means
+           "I want to talk"; pressing again means "I'm done". The panels above
+           it only show information for the current state, with no buttons. -->
       <div class="dock">
 
-        <div class="dock__panel" data-panel="idle">
+        <div class="dock__panel" data-panel="idle"></div>
+
+        <div class="dock__panel" data-panel="listening" hidden>
+          <div class="transcript" id="transcript" aria-live="off">
+            <span class="transcript__text" id="transcript-text"></span><span class="transcript__caret" aria-hidden="true"></span>
+          </div>
+          <div class="recorder" id="stop-listen-btn" aria-hidden="true">
+            <canvas class="recorder__wave" id="recorder-wave"></canvas>
+            <span class="recorder__time" id="recorder-time">0:00</span>
+          </div>
+        </div>
+
+        <div class="dock__panel" data-panel="busy" hidden>
+          <div class="progress-pill">
+            <span class="spinner" aria-hidden="true"></span>
+            <span id="progress-text">Processing your request</span>
+          </div>
+        </div>
+
+        <div class="dock__panel" data-panel="confirm" hidden>
+          <dl class="summary" id="summary" aria-label="Details to be submitted"></dl>
+        </div>
+
+        <div class="dock__panel" data-panel="ask" hidden>
+          <ol class="chips" id="ask-options" aria-label="Answers you can say"></ol>
+        </div>
+
+        <div class="dock__panel" data-panel="done" hidden></div>
+        <div class="dock__panel" data-panel="error" hidden></div>
+
+        <div class="dock__main">
           <div class="voicebar">
             <span class="wave wave--l" aria-hidden="true"><i style="--h:0.16;--k:0.5"></i><i style="--h:0.3;--k:0.8"></i><i style="--h:0.52;--k:1.0"></i><i style="--h:0.28;--k:0.7"></i><i style="--h:0.78;--k:1.1"></i><i style="--h:0.46;--k:0.9"></i><i style="--h:0.95;--k:1.2"></i><i style="--h:0.36;--k:0.6"></i></span>
             <button class="mic" id="mic-btn" type="button" aria-label="Start listening">
@@ -173,67 +205,8 @@
             </button>
             <span class="wave wave--r" aria-hidden="true"><i style="--h:0.16;--k:0.5"></i><i style="--h:0.3;--k:0.8"></i><i style="--h:0.52;--k:1.0"></i><i style="--h:0.28;--k:0.7"></i><i style="--h:0.78;--k:1.1"></i><i style="--h:0.46;--k:0.9"></i><i style="--h:0.95;--k:1.2"></i><i style="--h:0.36;--k:0.6"></i></span>
           </div>
-          <p class="hint"><kbd>Control</kbd> twice to talk · <button type="button" class="link" data-action="type">Type instead</button></p>
-        </div>
-
-        <div class="dock__panel" data-panel="listening" hidden>
-          <div class="transcript" id="transcript" aria-live="off">
-            <span class="transcript__text" id="transcript-text"></span><span class="transcript__caret" aria-hidden="true"></span>
-          </div>
-          <button class="recorder" id="stop-listen-btn" type="button" aria-label="Stop listening">
-            <canvas class="recorder__wave" id="recorder-wave" aria-hidden="true"></canvas>
-            <span class="recorder__time" id="recorder-time" aria-hidden="true">0:00</span>
-          </button>
-          <p class="hint">Pause when you're done, or tap the waveform to stop.</p>
-        </div>
-
-        <div class="dock__panel" data-panel="busy" hidden>
-          <div class="progress-pill">
-            <span class="spinner" aria-hidden="true"></span>
-            <span id="progress-text">Processing your request</span>
-          </div>
-          <button type="button" class="btn btn--ghost" data-action="stop">Stop</button>
-        </div>
-
-        <div class="dock__panel" data-panel="confirm" hidden>
-          <dl class="summary" id="summary" aria-label="Details to be submitted"></dl>
-          <div class="btn-row">
-            <button type="button" class="btn btn--quiet" id="cancel-btn" data-action="cancel">Cancel</button>
-            <button type="button" class="btn btn--primary" id="confirm-btn" data-action="confirm">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-              Submit
-            </button>
-          </div>
-          <p class="hint">Or say <q>yes</q> or <q>cancel</q>. Nothing is sent until you confirm.</p>
-        </div>
-
-        <div class="dock__panel" data-panel="ask" hidden>
-          <div class="chips" id="ask-options"></div>
-          <div class="btn-row btn-row--center">
-            <div class="voicebar voicebar--sm">
-              <span class="wave wave--l" aria-hidden="true"><i style="--h:0.16;--k:0.5"></i><i style="--h:0.3;--k:0.8"></i><i style="--h:0.52;--k:1.0"></i><i style="--h:0.28;--k:0.7"></i><i style="--h:0.78;--k:1.1"></i><i style="--h:0.46;--k:0.9"></i><i style="--h:0.95;--k:1.2"></i><i style="--h:0.36;--k:0.6"></i></span>
-              <button class="mic mic--sm" type="button" data-action="mic" aria-label="Answer by voice">
-                <span class="mic__glass" aria-hidden="true"></span>
-                <svg class="mic__icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></svg>
-              </button>
-              <span class="wave wave--r" aria-hidden="true"><i style="--h:0.16;--k:0.5"></i><i style="--h:0.3;--k:0.8"></i><i style="--h:0.52;--k:1.0"></i><i style="--h:0.28;--k:0.7"></i><i style="--h:0.78;--k:1.1"></i><i style="--h:0.46;--k:0.9"></i><i style="--h:0.95;--k:1.2"></i><i style="--h:0.36;--k:0.6"></i></span>
-            </div>
-          </div>
-          <p class="hint">Say your answer · <button type="button" class="link" data-action="type">Type instead</button></p>
-        </div>
-
-        <div class="dock__panel" data-panel="done" hidden>
-          <button type="button" class="btn btn--soft btn--wide" data-action="new">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></svg>
-            Start a new request
-          </button>
-        </div>
-
-        <div class="dock__panel" data-panel="error" hidden>
-          <div class="btn-row">
-            <button type="button" class="btn btn--quiet" data-action="type">Type instead</button>
-            <button type="button" class="btn btn--primary" data-action="retry">Try again</button>
-          </div>
+          <p class="hint" id="press-hint">Press, or tap <kbd>Control</kbd> twice, to talk</p>
+          <p class="hint"><button type="button" class="link" data-action="type">Type instead</button></p>
         </div>
 
         <form class="type-box" id="type-box" hidden>

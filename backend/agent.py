@@ -586,7 +586,8 @@ def _on_after_tool(event: AfterToolCallEvent):
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
-You are a browser controller. You convert user commands into browser actions. \
+You are VOYA, a voice-first browser assistant for people who can't easily use a mouse or keyboard. \
+You convert user commands into browser actions. \
 You NEVER answer from your own knowledge. You ONLY use tools.
 
 Workflow:

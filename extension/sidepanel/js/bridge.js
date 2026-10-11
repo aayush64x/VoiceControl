@@ -148,7 +148,9 @@
     else lastCtrlTap = t;
   }, true);
 
-  P.on('mic', startRecording);
+  // The one button: in every state, pressing means "I want to talk", and
+  // pressing again (while listening) means "I'm done".
+  P.on('mic', toggleMic);
   P.on('stopListening', () => stopRecording(true));
 
   // Option+Shift+V (background.js) toggles the mic; if it had to open this
@@ -190,7 +192,7 @@
 
     if (question && !isStopCommand(text)) {
       // A question is open: what the user says is the answer, not a new command
-      answer(normalizeAnswer(text, question.yesNo));
+      answer(normalizeAnswer(text, question.yesNo, question.view.data.options));
     } else if (!question && formInProgress && !isStopCommand(text)) {
       // Answered before the next question appeared: keep it for that question
       holdAnswer(text);
@@ -203,8 +205,23 @@
     return /^(stop|cancel|stop it|never mind|nevermind)[.!]?$/i.test(text.trim());
   }
 
-  // Spoken yes/no answers in everyday words map onto Yes / No
-  function normalizeAnswer(text, yesNo) {
+  const NUMBER_WORDS = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+  const ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth'];
+
+  // "two", "number 2", "option three", "the second one" -> the 2nd listed answer
+  function optionByNumber(text, options) {
+    if (!options || !options.length) return null;
+    const t = text.toLowerCase().replace(/[.!?]/g, '').trim()
+      .replace(/^(number|option|answer|choice|the)\s+/, '').replace(/\s+(one|option|answer)$/, '');
+    let n = /^\d$/.test(t) ? Number(t) : 0;
+    if (!n) n = NUMBER_WORDS.indexOf(t) + 1 || ORDINALS.indexOf(t) + 1;
+    return n >= 1 && n <= options.length ? options[n - 1] : null;
+  }
+
+  // Spoken answers in everyday words: numbers pick a listed option; yes/no map onto Yes / No
+  function normalizeAnswer(text, yesNo, options) {
+    const picked = optionByNumber(text, options);
+    if (picked) return picked;
     if (!yesNo) return text;
     const t = text.toLowerCase().replace(/[.!?]/g, '').trim();
     if (/^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|correct|right|submit)\b/.test(t)) return 'Yes';
@@ -283,7 +300,7 @@
     question = null;
   }
 
-  P.on('answer', (text) => (question ? answer(text) : sendCommand(text)));
+  P.on('answer', (text) => (question ? answer(normalizeAnswer(text, question.yesNo, question.view.data.options)) : sendCommand(text)));
   P.on('confirm', () => { if (question) answer('Yes'); });
   P.on('cancel', () => {
     if (question) answer('No');
@@ -511,7 +528,7 @@
         const early = takeHeldAnswer();
         if (early) {
           // Already answered: no need to read it out
-          answer(normalizeAnswer(early, question.yesNo));
+          answer(normalizeAnswer(early, question.yesNo, question.view.data.options));
           return;
         }
         showQuestion();
@@ -552,6 +569,28 @@
         return;
     }
   }
+
+  /* ---------------- What the one button will do ---------------- */
+
+  const pressHint = $('press-hint');
+  const micBtn = $('mic-btn');
+  const PRESS_HINTS = {
+    idle: 'Press, or tap <kbd>Control</kbd> twice, to talk',
+    listening: 'Press again when you\u2019re done',
+    thinking: 'Press to talk \u00B7 say \u201Cstop\u201D to cancel',
+    working: 'Press to talk \u00B7 say \u201Cstop\u201D to cancel',
+    ask: 'Press to answer \u00B7 say the answer or its number',
+    confirm: 'Press and say \u201Cyes\u201D to submit or \u201Cno\u201D to cancel',
+    done: 'Press to talk',
+    error: 'Press to talk',
+  };
+
+  function syncPressHint() {
+    const state = document.body.dataset.state || 'idle';
+    if (pressHint) pressHint.innerHTML = PRESS_HINTS[state] || PRESS_HINTS.idle; // fixed strings only
+    if (micBtn) micBtn.setAttribute('aria-label', state === 'listening' ? 'Stop listening' : 'Start listening');
+  }
+  new MutationObserver(syncPressHint).observe(document.body, { attributes: true, attributeFilter: ['data-state'] });
 
   /* ---------------- Start ---------------- */
 

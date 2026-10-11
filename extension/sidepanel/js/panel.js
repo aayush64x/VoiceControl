@@ -37,7 +37,7 @@
     },
     confirm: {
       eyebrow: 'Needs your OK', title: 'Ready to submit?',
-      sub: 'Please check these details first.', panel: 'confirm',
+      sub: 'Say \u201Cyes\u201D to submit, or \u201Cno\u201D to cancel.', panel: 'confirm',
     },
     done: {
       eyebrow: 'Done', title: 'Task completed.',
@@ -49,7 +49,7 @@
     },
     error: {
       eyebrow: 'Paused', title: "I couldn't finish that.",
-      sub: 'Nothing was submitted. You can try again or tell me another way.', panel: 'error',
+      sub: 'Nothing was submitted. Press the button and tell me another way.', panel: 'error',
     },
   };
 
@@ -161,21 +161,21 @@
     el.summary.hidden = rows.length === 0;
   }
 
+  // Answers are shown as a numbered list to SAY ("the second one", "two"),
+  // not buttons: the mic is the only button (single-button design).
   function renderOptions(options = []) {
     el.options.replaceChildren();
     options.forEach((opt, i) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'chip';
+      const li = document.createElement('li');
+      li.className = 'chip';
       const label = document.createElement('span');
       label.textContent = opt;
       const n = document.createElement('span');
       n.className = 'chip__n';
       n.textContent = i + 1;
       n.setAttribute('aria-hidden', 'true');
-      b.append(label, n);
-      b.addEventListener('click', () => emit('answer', opt));
-      el.options.append(b);
+      li.append(label, n);
+      el.options.append(li);
     });
   }
 
@@ -341,7 +341,7 @@
   /* ---------- on / off ---------- */
 
   const OFF_COPY = {
-    eyebrow: 'Off', title: 'Voice Agent is off.',
+    eyebrow: 'Off', title: 'VOYA is off.',
     sub: 'Turn it on with the switch above to use voice commands.',
   };
   let enabled = true;
@@ -406,12 +406,13 @@
     if (typing || !el.settings.hidden || e.target.closest('button, summary, select')) return;
     if (e.code === 'Space') {
       e.preventDefault();
+      // Space is the one button: talk in any state, press again when done
       if (current === 'listening') emit('stopListening');
-      else if (['idle', 'done', 'ask', 'error'].includes(current)) onMic();
+      else onMic();
     }
     // Number keys pick a listed answer: mirrors saying "one", "two".
-    if (current === 'ask' && /^[1-9]$/.test(e.key)) {
-      el.options.children[+e.key - 1]?.click();
+    if (current === 'ask' && /^[1-9]$/.test(e.key) && el.options.children[+e.key - 1]) {
+      emit('answer', el.options.children[+e.key - 1].firstChild.textContent);
     }
   });
 

@@ -870,3 +870,19 @@ body[data-power="off"] .hint kbd { opacity: 0.5; }
 
 /* The connection chip lives in the header now */
 .header__right .conn { padding: 3px 8px; }
+
+/* ---------- Single-button design ---------- */
+/* The mic is always present; panels above it only show information. */
+.dock__main { display: grid; justify-items: center; gap: var(--sp-1); }
+.dock__panel:empty { display: none; }
+.recorder { pointer-events: none; cursor: default; }  /* waveform is a picture, not a second button */
+ol.chips { list-style: none; margin: 0; padding: 0; }
+li.chip { cursor: default; box-shadow: none; }
+li.chip:hover { border-color: var(--c-hairline-strong); background: var(--c-surface); }
+/* While listening, the same button reads as "stop" */
+body[data-state="listening"] .mic__glass {
+  background:
+    radial-gradient(70% 55% at 30% 18%, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 70%),
+    linear-gradient(165deg, #ffb3b3 0%, #f07a7a 52%, #e05d5d 100%);
+}
+#press-hint { min-height: 1.3em; }

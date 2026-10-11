@@ -98,7 +98,7 @@ describe("side panel bridge", () => {
     expect(P.state).toBe("listening");
     expect(ws.sent).toContainEqual({ type: "voice_start" });
 
-    document.getElementById("stop-listen-btn").click();
+    document.getElementById("mic-btn").click();
     expect(ws.sent).toContainEqual({ type: "voice_stop", cancel: false });
     ws.receive({ type: "transcript", text: "what benefits do I qualify for", is_final: true });
     expect(ws.sent).toContainEqual({ type: "user_said", text: "what benefits do I qualify for" });
@@ -109,7 +109,7 @@ describe("side panel bridge", () => {
     const { P, ws } = loadPanel();
     ws.open();
     document.getElementById("mic-btn").click();
-    document.getElementById("stop-listen-btn").click();
+    document.getElementById("mic-btn").click();
     ws.receive({ type: "transcript", text: "", is_final: true, error: "Could not understand audio" });
     jest.advanceTimersByTime(200);
     expect(P.state).toBe("idle");
@@ -135,7 +135,7 @@ describe("side panel bridge", () => {
     expect(document.getElementById("strands-stats").textContent).toMatch(/^Strands · Claude Sonnet · 3 model calls/);
   });
 
-  test("a question with options shows chips; tapping one answers it", () => {
+  test("a question with options shows a numbered list; saying 'number four' answers it", () => {
     const { P, ws } = loadPanel();
     ws.open();
     ws.receive({ type: "agent_thinking", text: "benefits" });
@@ -146,7 +146,10 @@ describe("side panel bridge", () => {
     expect(title()).toBe("Are you married?");
     expect(chips()).toEqual(["Yes", "Yes, but we don't live together", "No, I'm widowed or divorced", "No, I've never been married"]);
 
-    document.querySelectorAll("#ask-options .chip")[3].click();
+    expect(document.querySelectorAll("#ask-options button").length).toBe(0); // a list to say, not buttons
+    document.getElementById("mic-btn").click();
+    document.getElementById("mic-btn").click(); // the same button stops listening
+    ws.receive({ type: "transcript", text: "number four", is_final: true });
     expect(ws.sent).toContainEqual({ id: 7, result: { answer: "No, I've never been married" } });
     expect(P.state).toBe("working");
   });
@@ -156,19 +159,23 @@ describe("side panel bridge", () => {
     ws.open();
     ws.receive({ id: 8, type: "ask_user", yes_no: true, question: "Have you ever worked and paid Social Security taxes?" });
     expect(chips()).toEqual(["Yes", "No"]);
-    document.querySelector('[data-action="mic"]').click(); // the mic in the question view
-    document.getElementById("stop-listen-btn").click();
+    document.getElementById("mic-btn").click();
+    document.getElementById("mic-btn").click();
     ws.receive({ type: "transcript", text: "yeah", is_final: true });
     expect(ws.sent).toContainEqual({ id: 8, result: { answer: "Yes" } });
   });
 
-  test("'Should I submit?' becomes the Submit / Cancel card", () => {
+  test("'Should I submit?' becomes the confirm state, answered by voice", () => {
     const { P, ws } = loadPanel();
     ws.open();
     ws.receive({ id: 9, type: "ask_user", yes_no: true, question: "I'll submit: Jordan, Tuesday morning. Should I submit?" });
     jest.advanceTimersByTime(200);
     expect(P.state).toBe("confirm");
-    document.getElementById("cancel-btn").click();
+    const visible = Array.from(document.querySelectorAll(".dock button")).filter((x) => !x.closest("[hidden]"));
+    expect(visible.length).toBe(2); // only the mic and "Type instead": no Submit / Cancel buttons
+    document.getElementById("mic-btn").click();
+    document.getElementById("mic-btn").click();
+    ws.receive({ type: "transcript", text: "no", is_final: true });
     expect(ws.sent).toContainEqual({ id: 9, result: { answer: "No" } });
   });
 
@@ -177,10 +184,12 @@ describe("side panel bridge", () => {
     ws.open();
     ws.receive({ type: "agent_thinking", text: "benefits" });
     ws.receive({ id: 1, type: "ask_user", yes_no: true, question: "Are you unable to work?" });
-    document.querySelectorAll("#ask-options .chip")[0].click(); // answer Q1
+    document.getElementById("type-input").value = "yes"; // answer Q1 by typing
+    document.getElementById("type-box").dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(ws.sent).toContainEqual({ id: 1, result: { answer: "Yes" } });
     // User speaks the next answer before Q2 arrives
     document.getElementById("mic-btn").click();
-    document.getElementById("stop-listen-btn").click();
+    document.getElementById("mic-btn").click();
     ws.receive({ type: "transcript", text: "yes", is_final: true });
     expect(ws.sent.filter((m) => m.type === "user_said")).toEqual([]); // not a new command
     ws.receive({ id: 2, type: "ask_user", yes_no: true, question: "Will it last a year or more?" });
@@ -255,5 +264,53 @@ describe("double-tap Control in the panel", () => {
     expect(P.state).toBe("listening");
     tap(); tap();
     expect(ws.sent).toContainEqual({ type: "voice_stop", cancel: false });
+  });
+});
+
+
+describe("single button", () => {
+  test("only the mic and 'Type instead' are buttons, in every state", () => {
+    const { P } = loadPanel();
+    for (const state of ["idle", "listening", "thinking", "working", "ask", "confirm", "done", "error"]) {
+      P.setState(state, state === "ask" ? { options: ["Yes", "No"] } : {});
+      const visibleButtons = Array.from(document.querySelectorAll(".dock button"))
+        .filter((b) => !b.closest("[hidden]"));
+      expect(visibleButtons.map((b) => b.id || b.textContent.trim())).toEqual(["mic-btn", "Type instead"]);
+    }
+  });
+
+  test("pressing while VOYA is working starts listening (say 'stop' to cancel)", () => {
+    const { P, ws } = loadPanel();
+    ws.open();
+    ws.receive({ type: "agent_thinking", text: "search cat videos" });
+    document.getElementById("mic-btn").click();
+    expect(P.state).toBe("listening");
+    document.getElementById("mic-btn").click();
+    ws.receive({ type: "transcript", text: "stop", is_final: true });
+    expect(ws.sent).toContainEqual({ type: "user_said", text: "stop" });
+  });
+
+  test("the hint under the button says what a press will do", async () => {
+    const { P } = loadPanel();
+    const hint = () => document.getElementById("press-hint").textContent;
+    P.setState("ask", { options: ["Yes", "No"] });
+    await Promise.resolve();
+    expect(hint()).toBe("Press to answer · say the answer or its number");
+    P.setState("listening");
+    await Promise.resolve();
+    expect(hint()).toBe("Press again when you’re done");
+    expect(document.getElementById("mic-btn").getAttribute("aria-label")).toBe("Stop listening");
+  });
+
+  test("spoken numbers and ordinals pick listed answers", () => {
+    const { ws } = loadPanel();
+    ws.open();
+    for (const [said, want] of [["2", "Afternoon"], ["the second one", "Afternoon"], ["option three", "Evening"], ["first", "Morning"]]) {
+      ws.receive({ id: said, type: "ask_user", yes_no: false, question: "When? Morning; Afternoon; or Evening." });
+      document.getElementById("mic-btn").click();
+      document.getElementById("mic-btn").click();
+      ws.receive({ type: "transcript", text: said, is_final: true });
+      expect(ws.sent).toContainEqual({ id: said, result: { answer: want } });
+    }
   });
 });

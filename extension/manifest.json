@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Voice Browser Agent",
+  "name": "VOYA",
   "version": "0.1",
-  "description": "Voice-controlled browser agent for accessibility",
+  "description": "VOYA: you say the goal, VOYA does the clicks. A voice-first browser agent for people who can't easily use a mouse or keyboard.",
   "permissions": [
     "activeTab",
     "sidePanel",
@@ -14,7 +14,7 @@
     "default_path": "sidepanel/sidepanel.html"
   },
   "action": {
-    "default_title": "Open Voice Agent"
+    "default_title": "Open VOYA"
   },
   "background": {
     "service_worker": "background.js"
@@ -36,7 +36,7 @@
         "default": "Alt+Shift+V",
         "mac": "Alt+Shift+V"
       },
-      "description": "Start or stop a voice command"
+      "description": "Open VOYA and start or stop listening"
     }
   }
 }
