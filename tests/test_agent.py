@@ -1,5 +1,6 @@
 """Tests for agent command parsing and routing (no AWS/Bedrock needed)."""
 
+import json
 import sys
 import os
 
@@ -118,3 +119,30 @@ class TestClassify:
 
     def test_haiku_still_works(self):
         assert classify("click the search button") == "haiku"
+
+    def test_sonnet_fill_form(self):
+        assert classify("fill out my disability benefits application") == "sonnet"
+
+
+class TestUserDetailsFile:
+    def test_seed_file_exists(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "backend", "user_details.json")
+        assert os.path.exists(path)
+
+    def test_seed_file_has_required_fields(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "backend", "user_details.json")
+        with open(path) as f:
+            details = json.load(f)
+        required = [
+            "first_name", "last_name", "date_of_birth", "email", "phone",
+            "address", "city", "state", "zip", "disability_type",
+        ]
+        for field in required:
+            assert field in details, f"Missing field: {field}"
+
+    def test_seed_file_values(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "backend", "user_details.json")
+        with open(path) as f:
+            details = json.load(f)
+        assert details["first_name"] == "Jordan"
+        assert details["last_name"] == "Rivera"

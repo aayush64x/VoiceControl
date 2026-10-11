@@ -19,6 +19,15 @@ from strands.models import BedrockModel
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 import server
+from memory_store import LocalMemoryStore
+from strands.memory import MemoryManager
+
+_memory_store = LocalMemoryStore()
+_memory_manager = MemoryManager(
+    stores=[_memory_store],
+    add_tool_config=True,
+    injection=True,
+)
 
 _server_loop = None
 
@@ -155,6 +164,8 @@ def act(action: str, element: int = 0, value: str = "") -> str:
         parts.append(f"on '{result['label']}'")
     if result.get("navigated"):
         parts.append("— page navigated, call read_page to see the new page")
+    if result.get("verified") is False:
+        parts.append("— WARNING: value may not have been set correctly, verify with read_page")
     return " ".join(parts)
 
 
@@ -212,6 +223,24 @@ def fill_form(fields: list[dict]) -> str:
     return summary + "\n" + "\n".join(lines)
 
 
+@tool
+def ask_user(question: str, yes_no: bool = False) -> str:
+    """Ask the user a question and wait for their answer.
+
+    Use this when you need information that is NOT in the saved user details.
+    For yes/no questions (like "Should I submit this form?"), set yes_no=True.
+
+    Args:
+        question: The question to ask the user
+        yes_no: If True, the user sees Yes/No buttons instead of a text input
+    """
+    result = _bridge(server.ask_user(question, yes_no), timeout=120)
+    if not result or "error" in result:
+        err = result.get("error", "no response") if result else "no response"
+        return f"Error asking user: {err}"
+    return result.get("answer", "No answer provided.")
+
+
 # ---------------------------------------------------------------------------
 # Agent setup
 # ---------------------------------------------------------------------------
@@ -223,20 +252,36 @@ You NEVER answer from your own knowledge. You ONLY use tools.
 Workflow:
 1. read_page to see the current page
 2. Act on elements by number
-3. read_page again only after navigation
+3. read_page again after navigation or when verifying results
 
 Efficiency rules:
 - Take the SHORTEST path. Use search boxes instead of browsing menus.
 - Combine multiple field fills into one fill_form call.
-- Do NOT read_page after every action — only after navigation to a new page.
 - Do NOT go back and retry more than once. If stuck, say so and stop.
-- Maximum 10 tool calls per task. If not done by then, report progress and stop.
+- Maximum 15 tool calls per task. If not done by then, report progress and stop.
 
 Action rules:
 - ALWAYS read_page before your first action.
 - Use element numbers from the LATEST read_page only.
 - For search: type the query, then click submit. Two actions, not five.
 - If act("open", url) fails, go to google.com and search for it.
+
+Self-correction rules:
+- After filling a form or clicking a button, read_page again to verify it worked.
+- If a field shows an error message or validation failure, read the error, fix the value, and retry.
+- If a click did not navigate or change the page, try a different approach.
+- If an element number is stale, call read_page to get fresh numbers.
+- Never claim a task is complete without verifying the page shows the expected result.
+
+Form filling rules:
+- Use search_memory to find saved user details before filling forms.
+- Match form labels to remembered details by meaning (e.g. "First Name" matches remembered first name).
+- For dropdowns, use act("select", element, value).
+- For checkboxes and radio buttons, use act("click", element).
+- If a form asks for information NOT in memory, use ask_user to ask the user.
+- When the user provides new information, use add_memory to save it for next time.
+- ALWAYS ask_user before submitting a form: "Ready to submit. Should I go ahead?"
+- Fill as many fields as possible in one fill_form call.
 
 Output rules:
 - NEVER answer from your own knowledge. You are not a chatbot.
@@ -257,7 +302,8 @@ def _get_agent(tier):
         _agents[tier] = Agent(
             model=BedrockModel(model_id=model_id, region_name="us-east-1"),
             system_prompt=_SYSTEM_PROMPT,
-            tools=[read_page, act, fill_form],
+            tools=[read_page, act, fill_form, ask_user],
+            memory_manager=_memory_manager,
         )
     return _agents[tier]
 
@@ -378,6 +424,7 @@ async def chat_loop():
 async def main():
     global _server_loop
     _server_loop = asyncio.get_running_loop()
+    server.on_user_input = process_input
 
     import websockets as _ws
 

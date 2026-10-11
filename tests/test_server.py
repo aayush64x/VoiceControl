@@ -19,6 +19,9 @@ def reset_server_state():
     server.pending = {}
     server.request_id = 0
     server.last_page = None
+    server.on_user_input = None
+    server._transcriber = None
+    server._processing = False
     yield
 
 
@@ -128,3 +131,171 @@ async def test_malformed_json_does_not_crash():
             await ws.send("not valid json{{{")
             await asyncio.sleep(0.05)
             assert server.client is not None
+
+
+@pytest.mark.asyncio
+async def test_ask_user_sends_question_and_gets_answer():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+
+            async def fake_user():
+                raw = await ws.recv()
+                msg = json.loads(raw)
+                assert msg["type"] == "ask_user"
+                assert msg["question"] == "What is your date of birth?"
+                assert msg["yes_no"] is False
+                await ws.send(json.dumps({
+                    "id": msg["id"],
+                    "result": {"answer": "March 14, 1985"},
+                }))
+
+            result_task = asyncio.create_task(server.ask_user("What is your date of birth?", yes_no=False))
+            await fake_user()
+            result = await result_task
+
+            assert result["answer"] == "March 14, 1985"
+
+
+@pytest.mark.asyncio
+async def test_ask_user_yes_no():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+
+            async def fake_user():
+                raw = await ws.recv()
+                msg = json.loads(raw)
+                assert msg["type"] == "ask_user"
+                assert msg["yes_no"] is True
+                await ws.send(json.dumps({
+                    "id": msg["id"],
+                    "result": {"answer": "Yes"},
+                }))
+
+            result_task = asyncio.create_task(server.ask_user("Submit the form?", yes_no=True))
+            await fake_user()
+            result = await result_task
+
+            assert result["answer"] == "Yes"
+
+
+@pytest.mark.asyncio
+async def test_ask_user_no_client():
+    result = await server.ask_user("Hello?")
+    assert "error" in result
+    assert "not connected" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_send_command_custom_timeout():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            result = await server.send_command("ask_user", timeout=0.1, question="test")
+            assert "error" in result
+            assert "timeout" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_user_said_routes_to_agent():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+
+        async def fake_agent(text):
+            return f"Did: {text}"
+
+        server.on_user_input = fake_agent
+
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": "click the button"}))
+
+            thinking = json.loads(await ws.recv())
+            assert thinking["type"] == "agent_thinking"
+
+            response = json.loads(await ws.recv())
+            assert response["type"] == "agent_response"
+            assert response["text"] == "Did: click the button"
+
+
+@pytest.mark.asyncio
+async def test_user_said_no_agent():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        server.on_user_input = None
+
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": "hello"}))
+
+            response = json.loads(await ws.recv())
+            assert response["type"] == "agent_response"
+            assert "not ready" in response["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_user_said_sequential():
+    """Multiple user_said messages are processed in order (WebSocket is sequential)."""
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        order = []
+
+        async def tracking_agent(text):
+            order.append(text)
+            await asyncio.sleep(0.05)
+            return f"Done: {text}"
+
+        server.on_user_input = tracking_agent
+
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": "first"}))
+            await ws.send(json.dumps({"type": "user_said", "text": "second"}))
+
+            messages = []
+            for _ in range(4):
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+                messages.append(msg)
+
+            assert order == ["first", "second"]
+            responses = [m for m in messages if m["type"] == "agent_response"]
+            assert responses[0]["text"] == "Done: first"
+            assert responses[1]["text"] == "Done: second"
+
+
+@pytest.mark.asyncio
+async def test_voice_start_stop():
+    """voice_start and voice_stop messages don't crash the handler."""
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "voice_stop"}))
+            await asyncio.sleep(0.05)
+            assert server.client is not None
+
+
+@pytest.mark.asyncio
+async def test_user_said_empty_ignored():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+
+        call_count = 0
+
+        async def counting_agent(text):
+            nonlocal call_count
+            call_count += 1
+            return "ok"
+
+        server.on_user_input = counting_agent
+
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": ""}))
+            await ws.send(json.dumps({"type": "user_said", "text": "   "}))
+            await asyncio.sleep(0.2)
+            assert call_count == 0

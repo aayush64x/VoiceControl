@@ -85,8 +85,13 @@ function listElements() {
     if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
       value = el.value ? ` [value: "${el.value}"]` : "";
     }
-    if (el.tagName === "SELECT" && el.selectedOptions.length) {
-      value = ` [selected: "${el.selectedOptions[0].text}"]`;
+    if (el.tagName === "SELECT") {
+      const opts = Array.from(el.options).filter((o) => o.value).map((o) => o.text);
+      const sel = el.selectedOptions.length ? el.selectedOptions[0].text : "";
+      value = sel ? ` [selected: "${sel}"]` : "";
+      if (opts.length > 0 && opts.length <= 20) {
+        value += ` options: ${opts.join(", ")}`;
+      }
     }
     if (el.type === "checkbox" || el.type === "radio") {
       value = el.checked ? " [checked]" : " [unchecked]";
@@ -234,7 +239,6 @@ function doAction(action, element, value) {
     el.focus();
     el.click();
     if (el.type === "checkbox" || el.type === "radio") {
-      el.checked = !el.checked;
       el.dispatchEvent(new Event("change", { bubbles: true }));
     }
     return { success: true, action: "click", element, label: getLabel(el), navigated: willNavigate };
@@ -249,18 +253,26 @@ function doAction(action, element, value) {
     setNativeValue(el, value);
     el.dispatchEvent(new InputEvent("input", { data: value, bubbles: true, inputType: "insertText" }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
-    return { success: true, action: "type", element, value };
+    const verified = el.value === value;
+    return { success: true, action: "type", element, value, verified };
   }
 
   if (action === "select") {
     if (el.tagName !== "SELECT") return { success: false, error: `Element ${element} is not a dropdown.` };
-    const option = Array.from(el.options).find(
-      (o) => o.value === value || o.text.toLowerCase() === value.toLowerCase()
-    );
-    if (!option) return { success: false, error: `Option "${value}" not found in dropdown.` };
+    const lv = value.toLowerCase();
+    const opts = Array.from(el.options);
+    const option =
+      opts.find((o) => o.value === value || o.text.toLowerCase() === lv) ||
+      opts.find((o) => o.text.toLowerCase().includes(lv)) ||
+      opts.find((o) => lv.includes(o.text.toLowerCase()) && o.text.length > 1);
+    if (!option) {
+      const available = opts.filter((o) => o.value).map((o) => o.text).join(", ");
+      return { success: false, error: `Option "${value}" not found in dropdown. Available: ${available}` };
+    }
     el.value = option.value;
     el.dispatchEvent(new Event("change", { bubbles: true }));
-    return { success: true, action: "select", element, value: option.text };
+    const verified = el.value === option.value;
+    return { success: true, action: "select", element, value: option.text, verified };
   }
 
   if (action === "press_key") {

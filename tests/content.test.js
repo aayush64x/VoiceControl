@@ -228,7 +228,9 @@ describe("listElements", () => {
     document.querySelectorAll("select").forEach(makeVisible);
 
     const results = listElements();
-    expect(results[0].value).toBe(' [selected: "Afternoon"]');
+    expect(results[0].value).toContain('[selected: "Afternoon"]');
+    expect(results[0].value).toContain("Morning");
+    expect(results[0].value).toContain("Afternoon");
   });
 
   test("numbers are sequential starting at 1", () => {
@@ -384,6 +386,50 @@ describe("doAction", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("No URL");
   });
+
+  test("click checkbox toggles it on", () => {
+    document.body.innerHTML = '<input type="checkbox" id="cb">';
+    const cb = document.getElementById("cb");
+    makeVisible(cb);
+    listElements();
+    const num = cb.dataset.agentNum;
+    expect(cb.checked).toBe(false);
+
+    const result = doAction("click", parseInt(num), null);
+    expect(result.success).toBe(true);
+    expect(cb.checked).toBe(true);
+  });
+
+  test("click checkbox twice toggles it off again", () => {
+    document.body.innerHTML = '<input type="checkbox" id="cb">';
+    const cb = document.getElementById("cb");
+    makeVisible(cb);
+    listElements();
+    const num = parseInt(cb.dataset.agentNum);
+
+    doAction("click", num, null);
+    expect(cb.checked).toBe(true);
+    doAction("click", num, null);
+    expect(cb.checked).toBe(false);
+  });
+
+  test("click radio button selects it", () => {
+    document.body.innerHTML = `
+      <input type="radio" name="g" id="r1" value="a">
+      <input type="radio" name="g" id="r2" value="b">
+    `;
+    const r1 = document.getElementById("r1");
+    const r2 = document.getElementById("r2");
+    makeVisible(r1);
+    makeVisible(r2);
+    listElements();
+
+    doAction("click", parseInt(r1.dataset.agentNum), null);
+    expect(r1.checked).toBe(true);
+
+    doAction("click", parseInt(r2.dataset.agentNum), null);
+    expect(r2.checked).toBe(true);
+  });
 });
 
 describe("stable numbers (fix 1)", () => {
@@ -413,6 +459,60 @@ describe("stable numbers (fix 1)", () => {
     const numC = second.find((e) => e.label === "C").num;
     expect(numC).toBeGreaterThan(numA);
     expect(numC).not.toBe(numA);
+  });
+});
+
+describe("dropdown fuzzy matching", () => {
+  test("partial match selects containing option", () => {
+    document.body.innerHTML = '<select><option value="">Choose</option><option value="tp">City of Topeka, KS</option><option value="lw">City of Lawrence, KS</option></select>';
+    document.querySelectorAll("select").forEach(makeVisible);
+    const results = listElements();
+
+    const result = doAction("select", results[0].num, "Topeka");
+    expect(result.success).toBe(true);
+    expect(document.querySelector("select").value).toBe("tp");
+  });
+
+  test("exact match takes priority over partial", () => {
+    document.body.innerHTML = '<select><option value="a">Morning</option><option value="b">Good Morning</option></select>';
+    document.querySelectorAll("select").forEach(makeVisible);
+    const results = listElements();
+
+    const result = doAction("select", results[0].num, "Morning");
+    expect(result.success).toBe(true);
+    expect(document.querySelector("select").value).toBe("a");
+  });
+
+  test("case insensitive partial match", () => {
+    document.body.innerHTML = '<select><option value="mo">MO - Missouri</option><option value="ks">KS - Kansas</option></select>';
+    document.querySelectorAll("select").forEach(makeVisible);
+    const results = listElements();
+
+    const result = doAction("select", results[0].num, "missouri");
+    expect(result.success).toBe(true);
+    expect(document.querySelector("select").value).toBe("mo");
+  });
+
+  test("no match still returns available options", () => {
+    document.body.innerHTML = '<select><option value="a">Alpha</option><option value="b">Beta</option></select>';
+    document.querySelectorAll("select").forEach(makeVisible);
+    const results = listElements();
+
+    const result = doAction("select", results[0].num, "Narnia");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Alpha");
+    expect(result.error).toContain("Beta");
+  });
+});
+
+describe("dropdown options in listElements", () => {
+  test("shows options for small dropdowns", () => {
+    document.body.innerHTML = '<select><option value="">Choose</option><option value="a">Red</option><option value="b">Blue</option></select>';
+    document.querySelectorAll("select").forEach(makeVisible);
+    const results = listElements();
+
+    expect(results[0].value).toContain("Red");
+    expect(results[0].value).toContain("Blue");
   });
 });
 

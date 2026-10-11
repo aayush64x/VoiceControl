@@ -6,27 +6,94 @@ import time
 
 import websockets
 
+from transcribe import VoiceTranscriber
+
 PORT = 8765
 client = None
 pending = {}
 request_id = 0
 last_page = None
 
+on_user_input = None
+_transcriber = None
+_processing = False
+
 
 async def handler(websocket):
-    global client
+    global client, _transcriber, _processing
     client = websocket
     print("[bridge] Extension connected")
     try:
         async for raw in websocket:
+            if isinstance(raw, bytes):
+                if _transcriber and _transcriber.running:
+                    await _transcriber.feed(raw)
+                continue
+
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 print(f"[bridge] Ignoring malformed message")
                 continue
+
+            msg_type = msg.get("type")
+
+            if msg_type == "voice_start":
+                if _transcriber and _transcriber.running:
+                    await _transcriber.stop()
+                _transcriber = VoiceTranscriber()
+
+                async def on_transcript(text, is_final):
+                    if client:
+                        await client.send(json.dumps({
+                            "type": "transcript",
+                            "text": text,
+                            "is_final": is_final,
+                        }))
+
+                await _transcriber.start(on_transcript)
+                print("[voice] Transcription started")
+                continue
+
+            if msg_type == "voice_stop":
+                if _transcriber:
+                    await _transcriber.stop()
+                    _transcriber = None
+                print("[voice] Transcription stopped")
+                continue
+
+            if msg_type == "user_said":
+                text = msg.get("text", "").strip()
+                if not text:
+                    continue
+                if _processing:
+                    await websocket.send(json.dumps({
+                        "type": "agent_response",
+                        "text": "Still processing previous command...",
+                    }))
+                    continue
+                _processing = True
+                try:
+                    if on_user_input:
+                        await websocket.send(json.dumps({"type": "agent_thinking"}))
+                        print(f"[voice] Processing: {text}")
+                        result = await on_user_input(text)
+                        await websocket.send(json.dumps({
+                            "type": "agent_response",
+                            "text": str(result),
+                        }))
+                    else:
+                        await websocket.send(json.dumps({
+                            "type": "agent_response",
+                            "text": "Agent not ready. Start the backend with agent.py.",
+                        }))
+                finally:
+                    _processing = False
+                continue
+
             if msg.get("id") in pending:
                 pending[msg["id"]].set_result(msg.get("result"))
-            elif msg.get("type") == "page_ready":
+            elif msg_type == "page_ready":
                 global last_page
                 last_page = msg
                 print(f"[bridge] Page ready: {msg.get('title', '?')} ({msg.get('count', 0)} elements)")
@@ -34,12 +101,16 @@ async def handler(websocket):
         print("[bridge] Extension disconnected")
     finally:
         client = None
+        if _transcriber and _transcriber.running:
+            await _transcriber.stop()
+            _transcriber = None
+        _processing = False
         for rid, future in list(pending.items()):
             if not future.done():
                 future.set_result({"error": "Extension disconnected."})
 
 
-async def send_command(msg_type, **kwargs):
+async def send_command(msg_type, timeout=10.0, **kwargs):
     """Send a command to the extension and wait for the result."""
     global request_id
     if not client:
@@ -54,7 +125,7 @@ async def send_command(msg_type, **kwargs):
 
     try:
         await client.send(json.dumps(msg))
-        result = await asyncio.wait_for(future, timeout=10.0)
+        result = await asyncio.wait_for(future, timeout=timeout)
         return result
     except asyncio.TimeoutError:
         return {"error": "Timeout waiting for extension response."}
@@ -66,6 +137,11 @@ async def send_command(msg_type, **kwargs):
 
 async def list_elements():
     return await send_command("list_elements")
+
+
+async def ask_user(question, yes_no=False):
+    """Send a question to the side panel and wait for the user's answer."""
+    return await send_command("ask_user", timeout=120.0, question=question, yes_no=yes_no)
 
 
 async def do_action(action, element=None, value=None):
