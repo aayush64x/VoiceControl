@@ -250,7 +250,7 @@ You are a browser controller. You convert user commands into browser actions. \
 You NEVER answer from your own knowledge. You ONLY use tools.
 
 Workflow:
-1. read_page to see the current page
+1. Look at the current page (included with the request, or call read_page)
 2. Act on elements by number
 3. read_page again after navigation or when verifying results
 
@@ -261,10 +261,16 @@ Efficiency rules:
 - Maximum 15 tool calls per task. If not done by then, report progress and stop.
 
 Action rules:
-- ALWAYS read_page before your first action.
-- Use element numbers from the LATEST read_page only.
-- For search: type the query, then click submit. Two actions, not five.
-- If act("open", url) fails, go to google.com and search for it.
+- If the request includes a page snapshot, use it for your first action. Otherwise call read_page first.
+- After any navigation, call read_page — old element numbers are no longer valid.
+- Use element numbers from the LATEST page listing only.
+- For searching on Google: act("open", 0, "https://www.google.com/search?q=YOUR+QUERY")
+- For searching on YouTube: act("open", 0, "https://www.youtube.com/results?search_query=YOUR+QUERY")
+- For searching on Wikipedia: act("open", 0, "https://en.wikipedia.org/wiki/TOPIC")
+- For searching on Amazon: act("open", 0, "https://www.amazon.com/s?k=YOUR+QUERY")
+- NEVER try to type into search boxes on Google, YouTube, ChatGPT, or other complex sites. Use URL navigation instead.
+- For simple HTML pages and forms, type/click normally.
+- If act("open", url) fails, go to google.com and search for it via URL.
 
 Self-correction rules:
 - After filling a form or clicking a button, read_page again to verify it worked.
@@ -364,10 +370,16 @@ async def _run_direct(text):
 
 def _run_agent(text, tier):
     agent = _get_agent(tier)
+    # Each command starts fresh: old page listings would bloat every request and
+    # confuse element numbers. Saved user details live in memory, not history.
+    agent.messages.clear()
     prompt = text
     if server.last_page and server.last_page.get("elements"):
         page_context = _format_page(server.last_page)
-        prompt = f"{text}\n\n[Current page already loaded — no need to call read_page]\n{page_context}"
+        prompt = (
+            f"{text}\n\n[Snapshot of the current page — use it for your first action; "
+            f"call read_page after navigating or if an element number fails]\n{page_context}"
+        )
     response = agent(prompt)
     return str(response)
 

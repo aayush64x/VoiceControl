@@ -1,142 +1,135 @@
-"""Tests for the VoiceTranscriber (mocks AWS Transcribe)."""
+"""Tests for the VoiceTranscriber (mocks the mic and Google Speech Recognition)."""
 
-import asyncio
-import sys
 import os
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
+import numpy as np
 import pytest
-from transcribe import VoiceTranscriber, _Handler
+import speech_recognition as sr
+from transcribe import VoiceTranscriber
+
+
+def _frames(n_samples):
+    return [np.zeros((n_samples, 1), dtype="int16")]
+
+
+@pytest.fixture
+def mock_stream():
+    with patch("transcribe.sd.InputStream") as cls:
+        yield cls
 
 
 @pytest.mark.asyncio
-async def test_feed_queues_audio():
+async def test_start_sets_running(mock_stream):
     t = VoiceTranscriber()
-    t._running = True
-    t._queue = asyncio.Queue()
-    await t.feed(b"\x00\x01\x02")
-    assert t._queue.qsize() == 1
-    chunk = await t._queue.get()
-    assert chunk == b"\x00\x01\x02"
+    await t.start(AsyncMock())
+    assert t.running
+    mock_stream.return_value.start.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_feed_ignored_when_not_running():
+async def test_start_reports_mic_error(mock_stream):
+    mock_stream.side_effect = Exception("no device")
     t = VoiceTranscriber()
-    t._running = False
-    t._queue = asyncio.Queue()
-    await t.feed(b"\x00\x01")
-    assert t._queue.qsize() == 0
+    cb = AsyncMock()
+    await t.start(cb)
+    assert not t.running
+    cb.assert_awaited_once()
+    assert "Microphone unavailable" in cb.await_args.kwargs["error"]
 
 
 @pytest.mark.asyncio
-async def test_stop_when_not_running():
+async def test_stop_when_not_running_does_nothing():
     t = VoiceTranscriber()
+    cb = AsyncMock()
+    t._callback = cb
     await t.stop()
     assert not t.running
+    cb.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_audio_gen_stops_on_none():
+async def test_stop_transcribes_and_sends_text(mock_stream):
     t = VoiceTranscriber()
-    t._queue = asyncio.Queue()
-    await t._queue.put(b"chunk1")
-    await t._queue.put(b"chunk2")
-    await t._queue.put(None)
-
-    chunks = []
-    async for c in t._audio_gen():
-        chunks.append(c)
-    assert chunks == [b"chunk1", b"chunk2"]
-
-
-@pytest.mark.asyncio
-async def test_running_property():
-    t = VoiceTranscriber()
-    assert not t.running
-    t._running = True
-    assert t.running
-
-
-@pytest.mark.asyncio
-async def test_start_sets_running():
-    t = VoiceTranscriber()
-
-    with patch("transcribe.TranscribeStreamingClient") as mock_client_cls:
-        mock_stream = AsyncMock()
-        mock_stream.output_stream = AsyncMock()
-        mock_stream.input_stream = AsyncMock()
-        mock_stream.input_stream.send_audio_event = AsyncMock()
-        mock_stream.input_stream.end_stream = AsyncMock()
-        mock_client_cls.return_value.start_stream_transcription = AsyncMock(return_value=mock_stream)
-
-        callback = AsyncMock()
-        await t.start(callback)
-        assert t.running
-
+    cb = AsyncMock()
+    await t.start(cb)
+    t._frames = _frames(16000)
+    with patch.object(t._recognizer, "recognize_google", return_value="click five"):
         await t.stop()
-        assert not t.running
+    cb.assert_awaited_once_with("click five", True)
+    mock_stream.return_value.close.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_handler_routes_final():
-    results_received = []
-
-    async def cb(text, is_final):
-        results_received.append((text, is_final))
-
-    mock_result = MagicMock()
-    mock_result.is_partial = False
-    mock_alt = MagicMock()
-    mock_alt.transcript = "hello world"
-    mock_result.alternatives = [mock_alt]
-
-    mock_event = MagicMock()
-    mock_event.transcript.results = [mock_result]
-
-    handler = _Handler(AsyncMock(), cb)
-    await handler.handle_transcript_event(mock_event)
-
-    assert len(results_received) == 1
-    assert results_received[0] == ("hello world", True)
-
-
-@pytest.mark.asyncio
-async def test_handler_routes_partial():
-    results_received = []
-
-    async def cb(text, is_final):
-        results_received.append((text, is_final))
-
-    mock_result = MagicMock()
-    mock_result.is_partial = True
-    mock_alt = MagicMock()
-    mock_alt.transcript = "hel"
-    mock_result.alternatives = [mock_alt]
-
-    mock_event = MagicMock()
-    mock_event.transcript.results = [mock_result]
-
-    handler = _Handler(AsyncMock(), cb)
-    await handler.handle_transcript_event(mock_event)
-
-    assert len(results_received) == 1
-    assert results_received[0] == ("hel", False)
-
-
-@pytest.mark.asyncio
-async def test_default_config():
+async def test_short_audio_reports_error(mock_stream):
     t = VoiceTranscriber()
-    assert t._region == "us-east-1"
-    assert t._sample_rate == 16000
-    assert t._language == "en-US"
+    cb = AsyncMock()
+    await t.start(cb)
+    t._frames = _frames(10)
+    await t.stop()
+    assert cb.await_args.args[0] == ""
+    assert cb.await_args.kwargs["error"] == "No audio recorded"
 
 
 @pytest.mark.asyncio
-async def test_custom_config():
-    t = VoiceTranscriber(region="us-west-2", sample_rate=8000, language="es-US")
-    assert t._region == "us-west-2"
-    assert t._sample_rate == 8000
-    assert t._language == "es-US"
+async def test_no_frames_reports_error(mock_stream):
+    t = VoiceTranscriber()
+    cb = AsyncMock()
+    await t.start(cb)
+    await t.stop()
+    assert cb.await_args.kwargs["error"] == "No audio recorded"
+
+
+@pytest.mark.asyncio
+async def test_unintelligible_audio_sends_error_not_text(mock_stream):
+    t = VoiceTranscriber()
+    cb = AsyncMock()
+    await t.start(cb)
+    t._frames = _frames(16000)
+    with patch.object(t._recognizer, "recognize_google", side_effect=sr.UnknownValueError()):
+        await t.stop()
+    assert cb.await_args.args[0] == ""
+    assert cb.await_args.kwargs["error"] == "Could not understand audio"
+
+
+@pytest.mark.asyncio
+async def test_request_error_sends_error(mock_stream):
+    t = VoiceTranscriber()
+    cb = AsyncMock()
+    await t.start(cb)
+    t._frames = _frames(16000)
+    with patch.object(t._recognizer, "recognize_google", side_effect=sr.RequestError("offline")):
+        await t.stop()
+    assert cb.await_args.args[0] == ""
+    assert "offline" in cb.await_args.kwargs["error"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_skips_transcription(mock_stream):
+    t = VoiceTranscriber()
+    cb = AsyncMock()
+    await t.start(cb)
+    t._frames = _frames(16000)
+    with patch.object(t._recognizer, "recognize_google") as rec:
+        await t.stop(transcribe=False)
+    rec.assert_not_called()
+    cb.assert_not_awaited()
+    assert t._frames == []
+
+
+@pytest.mark.asyncio
+async def test_audio_callback_only_records_while_running(mock_stream):
+    t = VoiceTranscriber()
+    await t.start(AsyncMock())
+    audio_cb = mock_stream.call_args.kwargs["callback"]
+    audio_cb(np.ones((4, 1), dtype="int16"), 4, None, None)
+    t.running = False
+    audio_cb(np.ones((4, 1), dtype="int16"), 4, None, None)
+    assert len(t._frames) == 1
+
+
+def test_default_config():
+    assert VoiceTranscriber()._sample_rate == 16000

@@ -3,3 +3,6 @@ strands-agents-tools
 boto3
 websockets
 python-dotenv
+SpeechRecognition
+sounddevice
+numpy

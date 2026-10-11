@@ -42,7 +42,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Fix 6: page_ready from content script — forward to side panel
   if (message.type === "page_ready") {
     chrome.runtime.sendMessage(message).catch(() => {});
   }

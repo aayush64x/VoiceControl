@@ -19,6 +19,36 @@ _transcriber = None
 _processing = False
 
 
+async def _process_user_said(websocket, text):
+    """Run one user command. Caller must set _processing = True before scheduling."""
+    global _processing
+    try:
+        if on_user_input:
+            await websocket.send(json.dumps({"type": "agent_thinking"}))
+            print(f"[voice] Processing: {text}")
+            result = await on_user_input(text)
+            await websocket.send(json.dumps({
+                "type": "agent_response",
+                "text": str(result),
+            }))
+        else:
+            await websocket.send(json.dumps({
+                "type": "agent_response",
+                "text": "Agent not ready. Start the backend with agent.py.",
+            }))
+    except Exception as exc:
+        print(f"[voice] Error: {exc}")
+        try:
+            await websocket.send(json.dumps({
+                "type": "agent_response",
+                "text": f"Error: {exc}",
+            }))
+        except Exception:
+            pass
+    finally:
+        _processing = False
+
+
 async def handler(websocket):
     global client, _transcriber, _processing
     client = websocket
@@ -40,16 +70,18 @@ async def handler(websocket):
 
             if msg_type == "voice_start":
                 if _transcriber and _transcriber.running:
-                    await _transcriber.stop()
+                    await _transcriber.stop(transcribe=False)
                 _transcriber = VoiceTranscriber()
 
-                async def on_transcript(text, is_final):
+                async def on_transcript(text, is_final, error=None):
                     if client:
-                        await client.send(json.dumps({
-                            "type": "transcript",
-                            "text": text,
-                            "is_final": is_final,
-                        }))
+                        msg_out = {"type": "transcript", "text": text, "is_final": is_final}
+                        if error:
+                            msg_out["error"] = error
+                        try:
+                            await client.send(json.dumps(msg_out))
+                        except websockets.ConnectionClosed:
+                            pass
 
                 await _transcriber.start(on_transcript)
                 print("[voice] Transcription started")
@@ -57,7 +89,10 @@ async def handler(websocket):
 
             if msg_type == "voice_stop":
                 if _transcriber:
-                    await _transcriber.stop()
+                    # Transcribe in the background so this loop keeps handling
+                    # messages. The transcript callback sends the result; the
+                    # client then sends user_said for agent processing.
+                    asyncio.create_task(_transcriber.stop(transcribe=not msg.get("cancel")))
                     _transcriber = None
                 print("[voice] Transcription stopped")
                 continue
@@ -72,23 +107,9 @@ async def handler(websocket):
                         "text": "Still processing previous command...",
                     }))
                     continue
+                # Set before scheduling so a second quick command can't slip past the check
                 _processing = True
-                try:
-                    if on_user_input:
-                        await websocket.send(json.dumps({"type": "agent_thinking"}))
-                        print(f"[voice] Processing: {text}")
-                        result = await on_user_input(text)
-                        await websocket.send(json.dumps({
-                            "type": "agent_response",
-                            "text": str(result),
-                        }))
-                    else:
-                        await websocket.send(json.dumps({
-                            "type": "agent_response",
-                            "text": "Agent not ready. Start the backend with agent.py.",
-                        }))
-                finally:
-                    _processing = False
+                asyncio.create_task(_process_user_said(websocket, text))
                 continue
 
             if msg.get("id") in pending:
@@ -102,9 +123,8 @@ async def handler(websocket):
     finally:
         client = None
         if _transcriber and _transcriber.running:
-            await _transcriber.stop()
+            await _transcriber.stop(transcribe=False)
             _transcriber = None
-        _processing = False
         for rid, future in list(pending.items()):
             if not future.done():
                 future.set_result({"error": "Extension disconnected."})

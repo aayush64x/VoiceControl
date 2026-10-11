@@ -102,7 +102,7 @@ Result shown to user, page updates
 
 ## Key Features
 
-- **Voice Control** — speak commands instead of clicking (coming soon)
+- **Voice Control** — click the mic, speak a command, and the agent carries it out
 - **Smart Element Detection** — every button, link, and field on the page gets a number
 - **Form Filling** — fill entire forms with one command
 - **Multi-Step Tasks** — "search for X" involves reading the page, finding the search box, typing, and clicking submit — all automatic

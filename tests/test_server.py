@@ -238,8 +238,8 @@ async def test_user_said_no_agent():
 
 
 @pytest.mark.asyncio
-async def test_user_said_sequential():
-    """Multiple user_said messages are processed in order (WebSocket is sequential)."""
+async def test_user_said_while_busy_is_rejected():
+    """A second command sent while one is running gets 'still processing', not run in parallel."""
     async with websockets.serve(server.handler, "localhost", 0) as ws_server:
         port = ws_server.sockets[0].getsockname()[1]
         order = []
@@ -257,14 +257,20 @@ async def test_user_said_sequential():
             await ws.send(json.dumps({"type": "user_said", "text": "second"}))
 
             messages = []
-            for _ in range(4):
+            for _ in range(3):
                 msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
                 messages.append(msg)
 
-            assert order == ["first", "second"]
-            responses = [m for m in messages if m["type"] == "agent_response"]
-            assert responses[0]["text"] == "Done: first"
-            assert responses[1]["text"] == "Done: second"
+            assert order == ["first"]
+            responses = [m["text"] for m in messages if m["type"] == "agent_response"]
+            assert "Still processing previous command..." in responses
+            assert "Done: first" in responses
+
+            # Once the first finishes, a new command is accepted
+            await ws.send(json.dumps({"type": "user_said", "text": "third"}))
+            for _ in range(2):
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+            assert msg == {"type": "agent_response", "text": "Done: third"}
 
 
 @pytest.mark.asyncio

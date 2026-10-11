@@ -1,95 +1,87 @@
-"""AWS Transcribe Streaming integration for voice input.
+"""Voice transcription using native mic capture + Google Speech Recognition.
 
-Captures PCM audio chunks from the WebSocket, streams them to AWS Transcribe,
-and returns partial/final transcription results via a callback.
+Captures audio directly from the system microphone using sounddevice,
+then transcribes using Google's free Speech Recognition API.
+No browser permissions needed.
 """
 
 import asyncio
+import numpy as np
+import sounddevice as sd
+import speech_recognition as sr
 
-from amazon_transcribe.client import TranscribeStreamingClient
-from amazon_transcribe.handlers import TranscriptResultStreamHandler
-from amazon_transcribe.model import TranscriptEvent
-
-
-class _Handler(TranscriptResultStreamHandler):
-    """Routes transcript events to a callback."""
-
-    def __init__(self, output_stream, callback):
-        super().__init__(output_stream)
-        self._callback = callback
-
-    async def handle_transcript_event(self, transcript_event: TranscriptEvent):
-        for result in transcript_event.transcript.results:
-            for alt in result.alternatives:
-                await self._callback(alt.transcript, not result.is_partial)
+# 0.1s of 16-bit mono audio at 16 kHz — anything shorter is a mis-click
+MIN_AUDIO_BYTES = 3200
 
 
 class VoiceTranscriber:
-    """Manages one streaming transcription session with AWS Transcribe."""
-
-    def __init__(self, region="us-east-1", sample_rate=16000, language="en-US"):
-        self._region = region
+    def __init__(self, sample_rate=16000):
         self._sample_rate = sample_rate
-        self._language = language
-        self._queue = None
-        self._running = False
-        self._task = None
-
-    @property
-    def running(self):
-        return self._running
+        self._frames = []
+        self._callback = None
+        self.running = False
+        self._recognizer = sr.Recognizer()
+        self._stream = None
 
     async def start(self, callback):
-        """Start transcription. callback(text, is_final) is awaited for each result."""
-        if self._running:
-            return
-        self._running = True
-        self._queue = asyncio.Queue()
-        self._task = asyncio.create_task(self._run(callback))
+        """Start recording. callback(text, is_final, error=None) is awaited once on stop."""
+        self._callback = callback
+        self._frames = []
 
-    async def stop(self):
-        """Stop the transcription session gracefully."""
-        if not self._running:
-            return
-        self._running = False
-        if self._queue:
-            await self._queue.put(None)
-        if self._task:
-            try:
-                await asyncio.wait_for(self._task, timeout=5)
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-                self._task.cancel()
-            self._task = None
+        def audio_callback(indata, frames, time_info, status):
+            if self.running:
+                self._frames.append(indata.copy())
 
-    async def feed(self, chunk: bytes):
-        """Feed raw PCM audio (16-bit signed, 16 kHz, mono)."""
-        if self._running and self._queue:
-            await self._queue.put(chunk)
-
-    async def _audio_gen(self):
-        """Async generator yielding audio chunks until None sentinel."""
-        while True:
-            chunk = await self._queue.get()
-            if chunk is None:
-                break
-            yield chunk
-
-    async def _run(self, callback):
         try:
-            client = TranscribeStreamingClient(region=self._region)
-            stream = await client.start_stream_transcription(
-                language_code=self._language,
-                media_sample_rate_hz=self._sample_rate,
-                media_encoding="pcm",
+            self._stream = sd.InputStream(
+                samplerate=self._sample_rate,
+                channels=1,
+                dtype="int16",
+                blocksize=4096,
+                callback=audio_callback,
             )
-            handler = _Handler(stream.output_stream, callback)
-
-            async def send_audio():
-                async for chunk in self._audio_gen():
-                    await stream.input_stream.send_audio_event(audio_chunk=chunk)
-                await stream.input_stream.end_stream()
-
-            await asyncio.gather(send_audio(), handler.handle_events())
+            self._stream.start()
         except Exception as exc:
-            self._running = False
-            await callback(f"[Transcription error: {exc}]", True)
+            self._stream = None
+            await callback("", True, error=f"Microphone unavailable: {exc}")
+            return
+        self.running = True
+
+    async def feed(self, chunk):
+        pass
+
+    async def stop(self, transcribe=True):
+        """Stop recording and, unless transcribe=False, send the result to the callback."""
+        was_running = self.running
+        self.running = False
+
+        if self._stream:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+
+        frames, self._frames = self._frames, []
+        if not was_running or not transcribe or not self._callback:
+            return
+
+        raw_bytes = np.concatenate(frames).tobytes() if frames else b""
+        if len(raw_bytes) < MIN_AUDIO_BYTES:
+            await self._callback("", True, error="No audio recorded")
+            return
+
+        audio = sr.AudioData(raw_bytes, self._sample_rate, 2)
+        loop = asyncio.get_running_loop()
+        try:
+            # recognize_google is a blocking HTTP call — keep it off the event loop
+            text = await loop.run_in_executor(None, self._recognizer.recognize_google, audio)
+        except sr.UnknownValueError:
+            await self._callback("", True, error="Could not understand audio")
+            return
+        except sr.RequestError as e:
+            await self._callback("", True, error=f"Transcription error: {e}")
+            return
+
+        if text:
+            await self._callback(text, True)
+        else:
+            await self._callback("", True, error="Could not understand audio")
