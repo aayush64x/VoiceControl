@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from strands import Agent, tool
 from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent
 from strands.models import BedrockModel
+from strands.models.model import CacheConfig
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -520,6 +521,8 @@ Workflow:
 3. read_page again after navigation or when verifying results
 
 Efficiency rules:
+- Don't narrate. Call the next tool directly — no "Now I'll click…" text between tool calls. \
+Only write text in your final reply.
 - Take the SHORTEST path. Use search boxes instead of browsing menus.
 - Combine multiple field fills into one fill_form call.
 - Do NOT go back and retry more than once. If stuck, say so and stop.
@@ -605,6 +608,9 @@ don't live together; No, I'm widowed or divorced; or No, I've never been married
 yes/no questions set yes_no=True. Don't ask what you already know from this task.
 - Radio buttons and checkboxes are shown as "Question → Answer" (e.g. "Are you married? → No"). \
 Match the user's spoken reply to an option by meaning ("never married" → "No, I've never been married").
+- The "Page now" listing already contains the question (in Headings and the "Question → option" \
+labels). Do NOT call read_text or read_page on each question page — ask right away. Use read_text \
+only if the question really isn't there, and on the final results page.
 - Answer AND click Next/Continue in ONE fill_form call, e.g. \
 fill_form([{"element": 7, "action": "click"}, {"element": 12, "action": "click"}]). \
 The result shows the next question ("Page now") — ask it right away.
@@ -639,7 +645,11 @@ def _get_agent(tier):
     if tier not in _agents:
         model_id = HAIKU if tier == "haiku" else SONNET
         _agents[tier] = Agent(
-            model=BedrockModel(model_id=model_id, region_name="us-east-1"),
+            # Prompt caching: the system prompt, tools and conversation so far are
+            # reused between steps instead of re-processed — much cheaper on long
+            # form tasks (latency is about the same at this size, measured live).
+            model=BedrockModel(model_id=model_id, region_name="us-east-1",
+                               cache_config=CacheConfig(strategy="auto")),
             system_prompt=_SYSTEM_PROMPT,
             tools=[read_page, read_text, act, fill_form, ask_user],
         )

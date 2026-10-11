@@ -69,7 +69,12 @@ function connectWs() {
       if (msg.is_final) {
         finalText = msg.text;
         transcriptEl.textContent = finalText;
-        if (pendingSend && finalText.trim() && answerQuestion && !isStopCommand(finalText)) {
+        if (pendingSend && finalText.trim() && !answerQuestion && formInProgress && !isStopCommand(finalText)) {
+          // Answered before the next question appeared: keep it for that question
+          pendingSend = false;
+          holdAnswer(finalText.trim());
+          finalText = "";
+        } else if (pendingSend && finalText.trim() && answerQuestion && !isStopCommand(finalText)) {
           // A question is on screen: what the user says is the answer, not a new command
           pendingSend = false;
           micStatus.textContent = "Click mic to speak";
@@ -91,6 +96,7 @@ function connectWs() {
     }
 
     if (msg.type === "agent_thinking") {
+      endForm(); // a new task starts — nothing carries over
       cmdResult.textContent = msg.text ? "Working on: " + msg.text : "Agent is thinking...";
       cmdResult.className = "";
       clearSteps();
@@ -130,6 +136,7 @@ function connectWs() {
     }
 
     if (msg.type === "agent_response") {
+      endForm();
       // Models sometimes reply in markdown; show plain text
       cmdResult.textContent = (msg.text || "").replace(/\*\*(.+?)\*\*/g, "$1").replace(/^#{1,6}\s+/gm, "");
       cmdResult.className = "";
@@ -148,11 +155,18 @@ function connectWs() {
     }
 
     if (msg.type === "ask_user") {
-      // Form questions are always read aloud, so the user can answer without looking
-      speak(msg.question + (msg.yes_no ? " Say yes or no." : ""), true);
+      formInProgress = true;
       showQuestion(msg.question, msg.yes_no, (answer) => {
         sendReply({ answer });
       });
+      const early = takeHeldAnswer();
+      if (early) {
+        // The user already answered this one — no need to read it out
+        answerQuestion(normalizeAnswer(early, msg.yes_no));
+        return;
+      }
+      // Form questions are always read aloud, so the user can answer without looking
+      speak(msg.question + (msg.yes_no ? " Say yes or no." : ""), true);
       return;
     }
 
@@ -519,6 +533,41 @@ function renderElements(response) {
 }
 
 // --- Ask-user UI ---
+// --- Answering early during a form ---
+// While a form task is running, an answer spoken before the next question
+// appears is held (up to 20s) and used for that question, instead of turning
+// into a new command. If no question comes, it's sent as a command after all.
+let formInProgress = false;
+let heldAnswer = null;
+let heldTimer = null;
+const HOLD_MS = 20000;
+
+function holdAnswer(text) {
+  heldAnswer = text;
+  micStatus.textContent = "Got it — I'll use that for the next question";
+  clearTimeout(heldTimer);
+  heldTimer = setTimeout(() => {
+    const text = takeHeldAnswer();
+    if (text && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "user_said", text }));
+    }
+  }, HOLD_MS);
+}
+
+function takeHeldAnswer() {
+  const text = heldAnswer;
+  heldAnswer = null;
+  clearTimeout(heldTimer);
+  if (text) micStatus.textContent = "Click mic to speak";
+  return text;
+}
+
+function endForm() {
+  formInProgress = false;
+  const leftover = takeHeldAnswer();
+  if (leftover) micStatus.textContent = `Didn't use "${leftover}" — the form had finished`;
+}
+
 // Set while a question is on screen, so a new command can dismiss it
 // and a spoken reply can answer it
 let closeQuestion = null;
