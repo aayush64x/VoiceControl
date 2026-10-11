@@ -1,0 +1,391 @@
+/*
+ * Solution section animations.
+ * Each card plays a short sequence once when the section enters the viewport (data-inview on the
+ * section) and rests on its final frame. Hovering a card remounts its visual, replaying the sequence.
+ * With reduced motion, only the final frames are shown.
+ */
+
+.section:not([data-inview="true"]) .anim {
+  animation-play-state: paused;
+}
+
+/* ---------- Card shell ---------- */
+
+.card {
+  transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.card:hover {
+  transform: translateY(-4px);
+}
+.panel {
+  transition: box-shadow 0.5s ease;
+}
+.card:hover .panel {
+  box-shadow:
+    inset 0 0 40px 0 rgba(255, 255, 255, 0.4),
+    inset 0 0 12px 0 #fff,
+    inset 0 -2px 2px 0 #1d2838,
+    0 18px 40px -18px rgba(174,196,255,0.45);
+}
+
+/* Soft lavender glow behind each visual */
+.glow {
+  background: radial-gradient(50% 50% at 50% 50%, rgba(200,184,250,0.22) 0%, rgba(200,184,250,0) 100%);
+  opacity: 0.7;
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+.card:hover .glow {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+/* Glass chip for captions inside the panels */
+.glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 100%);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.25),
+    inset 0 0 12px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(6px);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ---------- Card 01: glass orb, expanding waveform, typed command ---------- */
+
+.orb {
+  background:
+    radial-gradient(60% 60% at 35% 30%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 45%),
+    radial-gradient(70% 70% at 50% 65%, rgba(200,184,250,0.75) 0%, rgba(62,83,111,0.25) 60%, rgba(255, 255, 255, 0.08) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.35),
+    inset 0 -6px 14px 0 rgba(200,184,250,0.35),
+    0 0 28px 2px rgba(200,184,250,0.35);
+  animation: pop 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.orbHalo {
+  animation: halo 2.8s ease-in-out 0.7s infinite;
+}
+@keyframes halo {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 0;
+  }
+}
+
+/* The waveform widens out from the orb */
+.waveform {
+  animation: wave-open 1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.3s both;
+}
+@keyframes wave-open {
+  from {
+    transform: scaleX(0.15);
+    opacity: 0;
+  }
+  to {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+}
+
+/* Idle: bars keep breathing gently, as if listening */
+.bar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(200,184,250,0.7) 100%);
+  transform-origin: center;
+  animation: speak 1.4s ease-in-out infinite alternate;
+}
+@keyframes speak {
+  from {
+    transform: scaleY(var(--lo));
+  }
+  to {
+    transform: scaleY(var(--hi));
+  }
+}
+.card:hover .waveform {
+  filter: brightness(1.12);
+}
+
+/* Command types in one character at a time (21 characters) */
+.command {
+  animation: fade-up 0.4s ease 0.9s both;
+}
+.commandText {
+  width: 0;
+  animation: type-21 1.3s steps(21, end) 1.1s both;
+}
+@keyframes type-21 {
+  to {
+    width: 21ch;
+  }
+}
+.commandCaret {
+  animation: blink 0.9s steps(1) 1.1s 4 both;
+}
+@keyframes blink {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ---------- Card 02: node network with a travelling light ---------- */
+
+.netLine {
+  stroke: rgba(255, 255, 255, 0.24);
+  animation: fade-up 0.6s ease both;
+  animation-delay: var(--d);
+}
+.netNode {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pop 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--d);
+}
+.netPath {
+  stroke-dasharray: 260;
+  stroke-dashoffset: 260;
+  animation: draw 1.1s cubic-bezier(0.45, 0, 0.25, 1) 0.9s forwards;
+}
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+/* Route nodes pop in like the others, then light up as the pulse reaches them */
+.netPathNode {
+  animation:
+    pop 0.5s cubic-bezier(0.22, 1, 0.36, 1) both,
+    node-lit 0.4s ease forwards;
+  animation-delay: var(--d), var(--lit);
+}
+@keyframes node-lit {
+  to {
+    fill: #c8b8fa;
+    filter: drop-shadow(0 0 4px rgba(200,184,250,0.9));
+  }
+}
+/* Light pulse that runs along the chosen path, then rests at the end */
+.pulse {
+  offset-path: path("M14 60 L84 60 L156 36 L222 60");
+  offset-rotate: 0deg;
+  offset-distance: 0%;
+  opacity: 0;
+  animation: travel 1.1s cubic-bezier(0.45, 0, 0.25, 1) 0.9s forwards;
+}
+@keyframes travel {
+  0% {
+    offset-distance: 0%;
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+.planStep {
+  animation: fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--d);
+}
+.card:hover .netNode {
+  filter: brightness(1.2);
+}
+
+/* ---------- Card 03: miniature browser (one 4.6s run) ---------- */
+
+.cursor {
+  animation: cursor-path 4.6s cubic-bezier(0.45, 0, 0.25, 1) 0.3s both;
+}
+@keyframes cursor-path {
+  0%,
+  12% {
+    transform: translate(196px, 132px);
+  }
+  36% {
+    transform: translate(70px, 66px);
+  }
+  38% {
+    transform: translate(70px, 66px) scale(0.85);
+  }
+  40%,
+  70% {
+    transform: translate(70px, 66px);
+  }
+  80% {
+    transform: translate(52px, 104px);
+  }
+  82% {
+    transform: translate(52px, 104px) scale(0.85);
+  }
+  84%,
+  100% {
+    transform: translate(52px, 104px);
+  }
+}
+
+.field {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  animation: field-focus 4.6s ease 0.3s both;
+}
+@keyframes field-focus {
+  0%,
+  38% {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  }
+  40%,
+  72% {
+    box-shadow:
+      inset 0 0 0 1px rgba(200,184,250,0.9),
+      0 0 0 3px rgba(200,184,250,0.18);
+  }
+  76%,
+  100% {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  }
+}
+
+/* steps() applies per keyframe interval, so 40%→68% types one character at a time */
+.typed {
+  width: 0;
+  animation: type-10 4.6s steps(10, end) 0.3s both;
+}
+@keyframes type-10 {
+  0%,
+  40% {
+    width: 0;
+  }
+  68%,
+  100% {
+    width: 10ch;
+  }
+}
+
+.caret {
+  opacity: 0;
+  animation: caret 4.6s steps(1) 0.3s both;
+}
+@keyframes caret {
+  0%,
+  39% {
+    opacity: 0;
+  }
+  40%,
+  72% {
+    opacity: 1;
+  }
+  73%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.submit {
+  animation: press 4.6s ease 0.3s both;
+}
+@keyframes press {
+  0%,
+  81% {
+    transform: scale(1);
+    background: rgba(255, 255, 255, 0.9);
+  }
+  83% {
+    transform: scale(0.94);
+  }
+  86%,
+  100% {
+    transform: scale(1);
+    background: #c8b8fa;
+  }
+}
+
+.done {
+  animation: done 4.6s cubic-bezier(0.22, 1, 0.36, 1) 0.3s both;
+}
+@keyframes done {
+  0%,
+  85% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  92%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ---------- Reduced motion: final frames only ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .anim {
+    animation: none !important;
+  }
+  .card,
+  .card:hover {
+    transform: none;
+  }
+  .bar {
+    transform: scaleY(var(--mid));
+  }
+  .orbHalo {
+    opacity: 0;
+  }
+  .commandText {
+    width: 21ch;
+  }
+  .commandCaret {
+    opacity: 0;
+  }
+  .netPath {
+    stroke-dashoffset: 0;
+  }
+  .netPathNode {
+    fill: #c8b8fa;
+  }
+  .pulse {
+    opacity: 0;
+  }
+  .cursor {
+    transform: translate(52px, 104px);
+  }
+  .typed {
+    width: 10ch;
+  }
+  .submit {
+    background: #c8b8fa;
+  }
+  .done {
+    opacity: 1;
+  }
+}

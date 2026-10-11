@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+/* Color system: mascot-led blue / icy / lavender palette */
+:root {
+  /* Text */
+  --ink: #3e536f; /* Deep Steel Blue: headings, dark UI */
+  --heading: #3e536f;
+  --muted: #69758f; /* Muted Slate: body and supporting text */
+  /* Main UI */
+  --ice: #d4f1ff; /* Ice Blue */
+  --sky: #a9dfff; /* Sky Glow */
+  --surface: #eaf7ff; /* Ice Blue softened on white, for raised cards */
+  /* Accents */
+  --periwinkle: #aec4ff;
+  --lavender: #c8b8fa;
+  --lilac: #e7e5ff;
+  /* Supporting */
+  --ink-soft: #2c3b52; /* deep steel for the intentionally dark display panels */
+  --grey: #aec4ff; /* soft secondary tone (was neutral grey) */
+  --rainbow: #aec4ff 0%, #c8b8fa 25%, #e7e5ff 50%, #a9dfff 75%, #aec4ff 100%;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist), system-ui, sans-serif;
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-heading: var(--heading);
+  --color-muted: var(--muted);
+  --color-grey: var(--grey);
+  --color-surface: var(--surface);
+  --color-sky: var(--sky);
+  --color-ice: var(--ice);
+  --color-periwinkle: var(--periwinkle);
+  --color-lavender: var(--lavender);
+  --color-lilac: var(--lilac);
+  --breakpoint-tab: 810px;
+  --breakpoint-desk: 1200px;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--font-geist), system-ui, sans-serif;
+  letter-spacing: -0.03em;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Raised light card used across sections */
+/* Frosted steel-blue card (same look as the footer feedback card); text on it is white */
+.card-raised {
+  background: linear-gradient(180deg, #8fa4bd 0%, #7a8da7 100%);
+  box-shadow:
+    inset 0 0 4px 0 rgba(255, 255, 255, 0.8),
+    inset 0 0 40px 0 #fff;
+}
+
+.pill-raised {
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 1px 2px #fff,
+    inset 0 -2px 2px 0 rgba(62, 83, 111, 0.12);
+}
+
+.bg-rainbow-90 {
+  background: linear-gradient(90deg, var(--rainbow));
+}
+
+/* Edge fade used by marquees */
+.mask-fade-x {
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12.5%, #000 87.5%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0%, #000 12.5%, #000 87.5%, transparent 100%);
+}
+
+@keyframes marquee-left {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+@keyframes marquee-right {
+  from { transform: translateX(-50%); }
+  to { transform: translateX(0); }
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee-left var(--marquee-duration, 40s) linear infinite;
+}
+.marquee-track[data-direction="right"] {
+  animation-name: marquee-right;
+}
+.marquee-pausable:hover .marquee-track,
+.marquee-pausable:focus-within .marquee-track {
+  animation-play-state: paused;
+}
+
+/* Fade-up on first view */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1), transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.reveal[data-visible="true"] {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .marquee-track {
+    animation: none;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+  }
+}

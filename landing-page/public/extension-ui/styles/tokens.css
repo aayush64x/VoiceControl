@@ -1,0 +1,82 @@
+/* Soft Glass Companion — design tokens
+   Every color, radius, shadow and timing used by the panel lives here.
+   The panel is intentionally light-only: the brief calls for a bright,
+   airy surface, and the browser page remains the primary workspace. */
+
+:root {
+  /* Brand palette (from the brief) */
+  --c-sky: #7dcbff;          /* primary, mascot body */
+  --c-lavender: #a7b8ff;     /* secondary, mascot reflections */
+  --c-mist: #f5f9fc;         /* page background */
+  --c-offwhite: #f7faff;     /* raised inner surfaces */
+  --c-navy: #1e2a3a;         /* primary text, eyes */
+  --c-slate: #243247;        /* secondary dark */
+  --c-ice: #bfe9ff;          /* ambient glow */
+
+  /* Semantic roles */
+  --c-bg: var(--c-mist);
+  --c-surface: #ffffff;
+  --c-surface-2: var(--c-offwhite);
+  --c-text: var(--c-navy);
+  --c-text-2: #56677c;       /* 5.3:1 on white */
+  --c-text-3: #6b7b8f;       /* captions only, 4.5:1 on white */
+  --c-hairline: rgba(36, 50, 71, 0.08);
+  --c-hairline-strong: rgba(36, 50, 71, 0.14);
+  --c-action: #1f6fc5;       /* buttons with white text, 5.1:1 */
+  --c-action-hover: #185fad;
+  --c-action-soft: #e8f3ff;  /* tinted fills for secondary controls */
+  --c-focus: #1f6fc5;
+  --c-success: #23977d;      /* check badge (graphic, 3:1+ on white) */
+  --c-attention: #8a6d1f;    /* clarify badge text */
+  --c-attention-soft: #fff6dc;
+
+  /* Typography */
+  --font-sans: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --fs-title: 1.25rem;       /* 20px  primary status */
+  --fs-body: 0.9375rem;      /* 15px  supporting text */
+  --fs-label: 1rem;          /* 16px  buttons */
+  --fs-caption: 0.8125rem;   /* 13px  steps, hints */
+  --lh-tight: 1.25;
+  --lh-body: 1.5;
+
+  /* Spacing (4px grid) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* Shape */
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 24px;
+  --r-pill: 999px;
+  --target: 48px;            /* minimum hit target */
+  --target-lg: 72px;         /* mic button */
+
+  /* Elevation: soft neumorphic lift, never heavy */
+  --shadow-card:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 24px 48px -24px rgba(36, 50, 71, 0.22),
+    0 4px 12px -4px rgba(36, 50, 71, 0.06);
+  --shadow-raised:
+    0 1px 0 rgba(255, 255, 255, 0.95) inset,
+    0 8px 18px -8px rgba(36, 50, 71, 0.22),
+    0 1px 3px rgba(36, 50, 71, 0.06);
+  --shadow-inset:
+    inset 0 1px 2px rgba(36, 50, 71, 0.06),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.8);
+
+  /* Motion */
+  --ease-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-glass: cubic-bezier(0.45, 0.05, 0.25, 1);
+  --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --t-fast: 140ms;
+  --t-med: 260ms;
+  --t-slow: 520ms;
+
+  color-scheme: light;
+}
