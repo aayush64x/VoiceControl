@@ -109,6 +109,13 @@ function connectWs() {
       return;
     }
 
+    if (msg.type === "stats") {
+      // Strands' own numbers for the task that just finished
+      document.getElementById("strands-stats").textContent = msg.summary || "";
+      stepsSection.classList.add("has-steps");
+      return;
+    }
+
     if (msg.type === "site") {
       renderSiteInfo(msg);
       return;
@@ -486,6 +493,7 @@ const STEP_NAMES = {
   route: "Route",
   read_page: "Read page",
   read_text: "Read text",
+  safety: "Safety check",
   act: "Act",
   search: "Search",
   fill_form: "Fill form",
@@ -497,6 +505,7 @@ const STEP_ICONS = { running: "●", ok: "✓", error: "✗", cancelled: "⊘" }
 
 function clearSteps() {
   stepsEl.textContent = "";
+  document.getElementById("strands-stats").textContent = "";
   stepsSection.classList.remove("has-steps");
 }
 

@@ -13,8 +13,10 @@ import re
 import time
 from urllib.parse import quote_plus
 
-import boto3
+from typing import Literal
+
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 from strands import Agent, tool
 from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent
 from strands.models import BedrockModel
@@ -419,13 +421,85 @@ def ask_user(question: str, yes_no: bool = False) -> str:
         question: The question to ask the user
         yes_no: If True, the user sees Yes/No buttons instead of a text input
     """
+    global _submit_approved
     result = _bridge(server.ask_user(question, yes_no), timeout=125)
     if result and result.get("cancelled"):
         return _CANCELLED_ANSWER
     if not result or "error" in result:
         err = result.get("error", "no response") if result else "no response"
         return f"Error asking user: {err}"
-    return result.get("answer", "No answer provided.")
+    answer = result.get("answer", "No answer provided.")
+    # "Should I submit?" -> "Yes" also satisfies the submit safety check
+    if _SUBMIT_QUESTION.search(question) and _is_yes(answer):
+        _submit_approved = True
+    return answer
+
+
+# ---------------------------------------------------------------------------
+# Submit safety check — enforced in code by a Strands hook, not just a prompt
+# ---------------------------------------------------------------------------
+# Before any click on a submit-type button, the hook asks the user itself.
+# If they don't say yes, the tool call is cancelled: the agent cannot send a
+# form, place an order or pay without approval, whatever the model decides.
+# Next / Continue / Start / Search are never held up, so questionnaires flow.
+
+_SUBMIT_WORDS = re.compile(
+    r"\b(submit|send|pay|place (my |your )?order|purchase|buy|apply|sign up|register|confirm|"
+    r"checkout|check out|book|donate|post|publish|delete|finish|complete)\b", re.IGNORECASE)
+_NOT_SUBMIT = re.compile(r"\b(next|continue|start|begin|search|back|previous|learn|more|details|menu)\b",
+                         re.IGNORECASE)
+_SUBMIT_QUESTION = re.compile(r"\b(submit|send|go ahead|place (the )?order|pay|confirm|sign up)\b", re.IGNORECASE)
+
+_submit_approved = False  # reset at the start of every task
+
+
+def _is_yes(answer):
+    return bool(re.match(r"^\s*(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|submit|send)\b",
+                         str(answer or ""), re.IGNORECASE))
+
+
+def _is_submit_label(label):
+    return bool(label) and bool(_SUBMIT_WORDS.search(label)) and not _NOT_SUBMIT.search(label)
+
+
+def _clicked_elements(tool_use):
+    """Element numbers this tool call would click."""
+    name, inp = tool_use.get("name"), tool_use.get("input") or {}
+    if name == "act" and inp.get("action") == "click" and inp.get("element"):
+        return [inp["element"]]
+    if name == "fill_form":
+        return [f.get("element") for f in inp.get("fields") or []
+                if f.get("element") and f.get("action", "type") in ("click", "checkbox", "radio")]
+    return []
+
+
+def _guard_submit(event: BeforeToolCallEvent):
+    global _submit_approved
+    elements = _clicked_elements(event.tool_use)
+    if not elements or _submit_approved:
+        return
+    labels = []
+    for n in elements:
+        described = _bridge(server.send_command("action", action="describe", element=n))
+        if isinstance(described, dict) and described.get("label"):
+            labels.append(described["label"])
+    risky = next((label for label in labels if _is_submit_label(label)), None)
+    if not risky:
+        return
+
+    print(f"[safety] holding click on {risky!r} until the user approves")
+    _emit({"type": "step", "step_id": "safety", "tool": "safety", "status": "running",
+           "input": f'"{risky}" — asking you first'})
+    reply = _bridge(server.ask_user(f'Before I click "{risky}": should I go ahead and submit?', True), timeout=125)
+    if isinstance(reply, dict) and _is_yes(reply.get("answer")):
+        _submit_approved = True
+        _emit({"type": "step", "step_id": "safety", "tool": "safety", "status": "ok", "detail": "You approved it"})
+        return
+    print(f"[safety] blocked click on {risky!r}")
+    _emit({"type": "step", "step_id": "safety", "tool": "safety", "status": "cancelled",
+           "detail": "Blocked — nothing was submitted"})
+    event.cancel_tool = (f'BLOCKED by the safety check: the user did not approve clicking "{risky}". '
+                         "Nothing was submitted. Do not try to submit again — tell the user the form was not sent.")
 
 
 # ---------------------------------------------------------------------------
@@ -624,7 +698,9 @@ for as if they were.
 
 Field types:
 - Dropdowns: act("select", element, value). Checkboxes and radio buttons: act("click", element).
-- ALWAYS ask_user before a FINAL submit that sends the user's data (Submit, Send, Apply, Sign up).
+- ALWAYS ask_user before a FINAL submit that sends the user's data (Submit, Send, Apply, Sign up). \
+A safety check also guards submit buttons in code: without the user's yes, it asks them itself, and \
+if they say no the click is blocked. If a click comes back BLOCKED, don't retry — tell the user.
 
 Output rules:
 - NEVER answer from your own knowledge. You are not a chatbot.
@@ -655,6 +731,7 @@ def _get_agent(tier):
             system_prompt=_SYSTEM_PROMPT,
             tools=[read_page, read_text, act, fill_form, ask_user],
         )
+        _agents[tier].hooks.add_callback(BeforeToolCallEvent, _guard_submit)
         _agents[tier].hooks.add_callback(BeforeToolCallEvent, _on_before_tool)
         _agents[tier].hooks.add_callback(AfterToolCallEvent, _on_after_tool)
     return _agents[tier]
@@ -664,8 +741,19 @@ def _get_agent(tier):
 # Site memory — learn each site once, then go straight to its search/chat box
 # ---------------------------------------------------------------------------
 
-_PROFILE_PROMPT = """Classify this website for a voice browser assistant. Reply with ONLY a JSON object:
-{"name": "short site name", "type": "one of: video, search engine, weather, chat assistant, shopping, news, encyclopedia, social, email, maps, government, form, other", "summary": "one short sentence: what people do here", "after_search": "open_result if people usually open one result after searching (videos, products); read_text if the answer is shown on the results page (weather, facts); otherwise none"}
+class SiteProfile(BaseModel):
+    """What kind of website this is — returned as a typed object by Strands structured output."""
+
+    name: str = Field(description="Short site name, e.g. 'YouTube'")
+    type: Literal["video", "search engine", "weather", "chat assistant", "shopping", "news",
+                  "encyclopedia", "social", "email", "maps", "government", "form", "other"]
+    summary: str = Field(description="One short sentence: what people do on this site")
+    after_search: Literal["open_result", "read_text", "none"] = Field(
+        description="open_result if people usually open one result after searching (videos, products); "
+                    "read_text if the answer is shown on the results page (weather, facts); otherwise none")
+
+
+_PROFILE_PROMPT = """Classify this website for a voice browser assistant.
 
 Site: DOMAIN
 Title: TITLE
@@ -681,7 +769,8 @@ _learning = set()
 
 
 def _profile_site(domain, info):
-    """One quick Haiku call: what kind of site is this? Falls back to 'other' on any failure."""
+    """Classify a newly visited site with Strands structured output (Haiku) — a typed SiteProfile,
+    no JSON parsing. Falls back to 'other' on any failure."""
     keys = info.get("keys") or {}
     prompt = (_PROFILE_PROMPT
               .replace("DOMAIN", domain)
@@ -690,14 +779,10 @@ def _profile_site(domain, info):
               .replace("SEARCH", (keys.get("search") or {}).get("label", "none"))
               .replace("CHAT", (keys.get("chat") or {}).get("label", "none")))
     try:
-        client = boto3.client("bedrock-runtime", region_name="us-east-1")
-        reply = client.converse(
-            modelId=HAIKU,
-            messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"maxTokens": 200, "temperature": 0},
-        )
-        text = reply["output"]["message"]["content"][0]["text"]
-        return json.loads(re.search(r"\{.*\}", text, re.DOTALL).group(0))
+        profiler = Agent(model=BedrockModel(model_id=HAIKU, region_name="us-east-1", temperature=0),
+                         callback_handler=None)
+        result = profiler(prompt, structured_output_model=SiteProfile)
+        return result.structured_output.model_dump()
     except Exception as exc:
         print(f"[sites] couldn't classify {domain}: {exc}")
         return {"name": (info.get("title") or domain)[:40], "type": "other"}
@@ -891,6 +976,34 @@ async def _run_direct(text):
 _running_agent = None
 
 
+def _metrics_snapshot(agent):
+    """Strands' running totals for this agent (they accumulate across tasks)."""
+    m = agent.event_loop_metrics
+    usage = dict(m.accumulated_usage or {})
+    return {
+        "model_calls": m.cycle_count,
+        "tool_calls": sum(t.call_count for t in m.tool_metrics.values()),
+        "input": usage.get("inputTokens", 0),
+        "output": usage.get("outputTokens", 0),
+        "cache_read": usage.get("cacheReadInputTokens", 0),
+        "cache_write": usage.get("cacheWriteInputTokens", 0),
+    }
+
+
+def task_stats(before, after, seconds, tier):
+    """What Strands did for one task: the difference between two snapshots."""
+    d = {k: after[k] - before[k] for k in before}
+    prompt_tokens = d["input"] + d["cache_read"] + d["cache_write"]
+    cached_pct = round(100 * d["cache_read"] / prompt_tokens) if prompt_tokens else 0
+    total_k = (prompt_tokens + d["output"]) / 1000
+    model = "Claude Haiku" if tier == "haiku" else "Claude Sonnet"
+    summary = (f"Strands · {model} · {d['model_calls']} model calls · {d['tool_calls']} tool calls · "
+               f"{total_k:.1f}k tokens · {cached_pct}% cached · {seconds:.0f}s")
+    return {"model": model, "model_calls": d["model_calls"], "tool_calls": d["tool_calls"],
+            "tokens": prompt_tokens + d["output"], "cached_pct": cached_pct,
+            "seconds": round(seconds, 1), "summary": summary}
+
+
 def _with_location(text):
     """Prefix the command with the page the user is on (title + address only).
 
@@ -926,11 +1039,18 @@ def _run_agent(text, tier):
     # Each command starts fresh: old page listings would bloat every request and
     # confuse element numbers. Nothing about the user carries over between tasks.
     agent.messages.clear()
+    global _submit_approved
+    _submit_approved = False  # approval never carries over to another task
     _running_agent = agent
+    before = _metrics_snapshot(agent)
+    start = time.time()
     try:
         response = agent(_with_location(text))
     finally:
         _running_agent = None
+        stats = task_stats(before, _metrics_snapshot(agent), time.time() - start, tier)
+        print(f"[strands] {stats['summary']}")
+        _emit({"type": "stats", **stats})
     if getattr(response, "stop_reason", None) == "cancelled":
         return "Stopped."
     return str(response)

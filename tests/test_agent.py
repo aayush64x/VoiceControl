@@ -427,11 +427,38 @@ class TestLearnSite:
         import agent
 
         class Boom:
-            def converse(self, **kw):
+            def __init__(self, *a, **k):
+                pass
+
+            def __call__(self, *a, **k):
                 raise RuntimeError("no network")
 
-        monkeypatch.setattr(agent.boto3, "client", lambda *a, **k: Boom())
+        monkeypatch.setattr(agent, "Agent", Boom)
         assert agent._profile_site("x.com", {"title": "X"}) == {"name": "X", "type": "other"}
+
+    def test_profile_uses_strands_structured_output(self, monkeypatch):
+        import agent
+        seen = {}
+
+        class FakeResult:
+            structured_output = agent.SiteProfile(name="YouTube", type="video", summary="Watch videos",
+                                                  after_search="open_result")
+
+        class FakeAgent:
+            def __init__(self, *a, **k):
+                pass
+
+            def __call__(self, prompt, structured_output_model=None):
+                seen["model"] = structured_output_model
+                seen["prompt"] = prompt
+                return FakeResult()
+
+        monkeypatch.setattr(agent, "Agent", FakeAgent)
+        out = agent._profile_site("youtube.com", {"title": "YouTube", "headings": ["Home"],
+                                                  "keys": {"search": {"label": "Search"}}})
+        assert out == {"name": "YouTube", "type": "video", "summary": "Watch videos", "after_search": "open_result"}
+        assert seen["model"] is agent.SiteProfile
+        assert "youtube.com" in seen["prompt"] and "Search" in seen["prompt"]
 
 
 class TestNewTab:
@@ -672,3 +699,133 @@ class TestBlankTab:
     def test_broad_question_goes_to_sonnet(self):
         assert classify("what benefits do I qualify for") == "sonnet"
         assert parse_site_command("what benefits do I qualify for") is None
+
+
+class TestSubmitSafetyHook:
+    """A Strands hook blocks submit-type clicks unless the user says yes."""
+
+    def test_submit_labels(self):
+        from agent import _is_submit_label
+        for label in ["Submit", "Submit application", "Send message", "Place order", "Pay now", "Sign up", "Confirm"]:
+            assert _is_submit_label(label), label
+        for label in ["Next", "Continue", "Start", "Search", "Back", "Yes", "Learn more", "", None]:
+            assert not _is_submit_label(label), label
+
+    def test_clicked_elements(self):
+        from agent import _clicked_elements
+        assert _clicked_elements({"name": "act", "input": {"action": "click", "element": 9}}) == [9]
+        assert _clicked_elements({"name": "act", "input": {"action": "type", "element": 3, "value": "x"}}) == []
+        assert _clicked_elements({"name": "fill_form", "input": {"fields": [
+            {"element": 2, "value": "Jo"}, {"element": 7, "action": "radio"}, {"element": 12, "action": "click"}]}}) == [7, 12]
+        assert _clicked_elements({"name": "read_page", "input": {}}) == []
+
+    def _run_agent_clicking(self, monkeypatch, label, answer):
+        """Real Strands agent + scripted model that clicks element 9; browser faked."""
+        import asyncio as aio
+        import json as js
+        import agent
+        import server
+        from strands import Agent
+        from strands.hooks import BeforeToolCallEvent
+        from strands.models.model import Model
+
+        class Scripted(Model):
+            def __init__(self):
+                self.n = 0
+
+            def update_config(self, **k): pass
+            def get_config(self): return {}
+
+            async def structured_output(self, *a, **k):
+                if False:
+                    yield
+
+            async def stream(self, messages, tool_specs=None, system_prompt=None, **kw):
+                self.n += 1
+                yield {"messageStart": {"role": "assistant"}}
+                if self.n == 1:
+                    yield {"contentBlockStart": {"start": {"toolUse": {"toolUseId": "t1", "name": "act"}}}}
+                    yield {"contentBlockDelta": {"delta": {"toolUse": {"input": js.dumps({"action": "click", "element": 9})}}}}
+                    yield {"contentBlockStop": {}}
+                    yield {"messageStop": {"stopReason": "tool_use"}}
+                else:
+                    yield {"contentBlockDelta": {"delta": {"text": "done"}}}
+                    yield {"contentBlockStop": {}}
+                    yield {"messageStop": {"stopReason": "end_turn"}}
+
+        clicks, questions = [], []
+
+        async def send_command(msg_type, **kw):
+            return {"success": True, "label": label} if kw.get("action") == "describe" else {}
+
+        async def do_action(action, element=None, value=None, submit=False, selector=None):
+            clicks.append(element)
+            return {"success": True, "action": action, "label": label}
+
+        async def ask_user(question, yes_no=False):
+            questions.append(question)
+            return {"answer": answer}
+
+        monkeypatch.setattr(server, "send_command", send_command)
+        monkeypatch.setattr(server, "do_action", do_action)
+        monkeypatch.setattr(server, "ask_user", ask_user)
+        monkeypatch.setattr(agent, "_emit", lambda m: None)
+        monkeypatch.setattr(agent, "_submit_approved", False)
+
+        # Like the real app: the "server" loop runs on its own thread and the
+        # agent's tools/hooks reach it through agent._bridge
+        import threading
+        loop = aio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, daemon=True)
+        thread.start()
+        monkeypatch.setattr(agent, "_server_loop", loop)
+        try:
+            a = Agent(model=Scripted(), tools=[agent.act], callback_handler=None)
+            a.hooks.add_callback(BeforeToolCallEvent, agent._guard_submit)
+            a("submit the form")
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=2)
+        return clicks, questions, a.messages
+
+    def test_no_means_the_click_never_happens(self, monkeypatch):
+        clicks, questions, messages = self._run_agent_clicking(monkeypatch, "Submit application", "No")
+        assert clicks == []                       # blocked: the tool never ran
+        assert questions == ['Before I click "Submit application": should I go ahead and submit?']
+        assert "BLOCKED by the safety check" in str(messages)
+
+    def test_yes_lets_it_through(self, monkeypatch):
+        clicks, questions, _ = self._run_agent_clicking(monkeypatch, "Submit application", "Yes")
+        assert clicks == [9] and len(questions) == 1
+
+    def test_next_button_is_never_held(self, monkeypatch):
+        clicks, questions, _ = self._run_agent_clicking(monkeypatch, "Next", "No")
+        assert clicks == [9] and questions == []
+
+    def test_agents_own_yes_counts(self, monkeypatch):
+        import agent
+        import server
+        monkeypatch.setattr(agent, "_submit_approved", False)
+
+        async def ask_user(question, yes_no=False):
+            return {"answer": "Yes"}
+
+        monkeypatch.setattr(server, "ask_user", ask_user)
+        monkeypatch.setattr(agent, "_bridge", lambda coro, timeout=15: asyncio_run(coro))
+        agent.ask_user("I'll submit: Jordan, Tuesday morning. Should I submit?", True)
+        assert agent._submit_approved is True
+        # A questionnaire "yes" is not a submit approval
+        monkeypatch.setattr(agent, "_submit_approved", False)
+        agent.ask_user("Are you married?", True)
+        assert agent._submit_approved is False
+
+
+class TestTaskStats:
+    def test_stats_are_per_task_differences(self):
+        from agent import task_stats
+        before = {"model_calls": 10, "tool_calls": 9, "input": 1000, "output": 500, "cache_read": 0, "cache_write": 0}
+        after = {"model_calls": 24, "tool_calls": 22, "input": 1600, "output": 1300, "cache_read": 9000, "cache_write": 2000}
+        s = task_stats(before, after, 38.4, "sonnet")
+        assert s["model_calls"] == 14 and s["tool_calls"] == 13
+        assert s["cached_pct"] == 78  # 9000 of 11600 prompt tokens
+        assert s["summary"] == "Strands · Claude Sonnet · 14 model calls · 13 tool calls · 12.4k tokens · 78% cached · 38s"

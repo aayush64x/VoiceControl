@@ -753,6 +753,11 @@ function doAction(action, element, value, submit = false) {
   const el = elementMap[element];
   if (!el) return { success: false, error: `Element ${element} not found. Run read first to get the current element list.` };
 
+  // What an element is, without touching it (the backend's submit safety check uses this)
+  if (action === "describe") {
+    return { success: true, action: "describe", element, label: getLabel(el), type: getElementType(el) };
+  }
+
   if (!visibleTarget(el)) return { success: false, error: `Element ${element} is no longer visible on the page.` };
 
   if (el.disabled) return { success: false, error: `Element ${element} (${getLabel(el)}) is disabled.` };
@@ -984,6 +989,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage 
         || message.action === "read"
         || message.action === "read_text"
         || message.action === "site_info"
+        || message.action === "describe"
         || message.action === "scroll"
         || message.action === "back"
         || message.action === "open"
