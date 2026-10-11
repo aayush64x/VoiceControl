@@ -135,7 +135,7 @@ Result shown to user, page updates
 - **Mobile-friendly** — judges might check on their phones
 - Include the architecture diagram visually (not just text)
 - Add a section for screenshots/demo (we'll add actual screenshots later — leave placeholder boxes for now)
-- Put the GitHub repo link: `github.com/aayush64x/VoiceControl`
+- Put the GitHub repo link: `github.com/aayush64x/voya`
 - The tone should be: **confident, accessible, human** — not corporate, not overly technical
 
 ---
@@ -144,8 +144,8 @@ Result shown to user, page updates
 
 ```
 # Clone the repo
-git clone https://github.com/aayush64x/VoiceControl.git
-cd VoiceControl
+git clone https://github.com/aayush64x/voya.git
+cd voya
 
 # Install Python dependencies
 pip install -r backend/requirements.txt
@@ -174,7 +174,7 @@ python backend/agent.py
 1. Put the website files in the `docs/` folder in the repo
 2. The main file should be `docs/index.html`
 3. In GitHub repo settings → Pages → set source to `main` branch, `/docs` folder
-4. The site will be live at: `aayush64x.github.io/VoiceControl`
+4. The site will be live at: `aayush64x.github.io/voya`
 
 ---
 

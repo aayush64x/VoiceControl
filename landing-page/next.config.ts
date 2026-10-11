@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-// NEXT_PUBLIC_BASE_PATH is set when building for GitHub Pages (served from /VoiceControl/).
+// NEXT_PUBLIC_BASE_PATH is set when building for GitHub Pages (served from /voya/).
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || undefined;
 
 const nextConfig: NextConfig = {

@@ -125,8 +125,8 @@ flowchart LR
 
 **1. Install**
 ```bash
-git clone https://github.com/aayush64x/VoiceControl.git
-cd VoiceControl
+git clone https://github.com/aayush64x/voya.git
+cd voya
 python3 -m venv venv
 source venv/bin/activate            # Windows: venv\Scripts\activate
 pip install -r backend/requirements.txt
