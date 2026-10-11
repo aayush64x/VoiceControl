@@ -153,3 +153,15 @@ async def test_audio_callback_tracks_level(mock_stream):
     loud = (np.random.default_rng(3).normal(0, 0.2 * 32768, (1024, 1))).astype("int16")
     audio_cb(loud, 1024, None, None)
     assert t.level > 0.5
+
+
+@pytest.mark.asyncio
+async def test_transcribes_in_the_chosen_language(mock_stream):
+    t = VoiceTranscriber(language="ko-KR")
+    cb = AsyncMock()
+    await t.start(cb)
+    t._frames = _frames(16000)
+    with patch.object(t._recognizer, "recognize_google", return_value="멈춰") as rec:
+        await t.stop()
+    assert rec.call_args.kwargs["language"] == "ko-KR"
+    cb.assert_awaited_once_with("멈춰", True)

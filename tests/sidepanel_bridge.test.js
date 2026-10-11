@@ -413,3 +413,64 @@ describe("live voice level and step details", () => {
     expect(details).toEqual(["Element 9 not found."]);
   });
 });
+
+describe("languages", () => {
+  const say = (ws, text) => {
+    document.getElementById("mic-btn").click();
+    document.getElementById("mic-btn").click();
+    ws.receive({ type: "transcript", text, is_final: true });
+  };
+
+  test("the saved language is sent when connected, and the picker changes it", () => {
+    const { ws } = loadPanel();
+    ws.open();
+    expect(ws.sent).toContainEqual({ type: "set_language", lang: "en" });
+    const picker = document.getElementById("set-language");
+    picker.value = "ko";
+    picker.dispatchEvent(new Event("change"));
+    expect(ws.sent).toContainEqual({ type: "set_language", lang: "ko" });
+    expect(localStorage.getItem("voya:lang")).toBe("ko");
+  });
+
+  test("Spanish: 'sí' answers yes; 'la segunda' picks option 2; 'para' stops", () => {
+    const { ws } = loadPanel();
+    ws.open();
+    ws.receive({ type: "language", lang: "es" });
+    ws.receive({ id: 1, type: "ask_user", yes_no: true, question: "¿Está casado?" });
+    expect(chips()).toEqual(["Sí", "No"]);
+    say(ws, "Sí");
+    expect(ws.sent).toContainEqual({ id: 1, result: { answer: "Yes" } });
+    ws.receive({ id: 2, type: "ask_user", yes_no: false, question: "¿Cuándo? Mañana; Tarde; o Noche." });
+    say(ws, "la segunda");
+    expect(ws.sent).toContainEqual({ id: 2, result: { answer: "Tarde" } });
+    ws.receive({ id: 3, type: "ask_user", yes_no: true, question: "¿Sigue?" });
+    say(ws, "¡Para!");
+    expect(ws.sent).toContainEqual({ type: "user_said", text: "¡Para!" }); // a control word, not an answer
+  });
+
+  test("Korean: '네' is yes, '두 번째' and '2번' pick option 2, '멈춰' stops", () => {
+    const { ws } = loadPanel();
+    ws.open();
+    ws.receive({ type: "language", lang: "ko" });
+    ws.receive({ id: 1, type: "ask_user", yes_no: true, question: "결혼하셨나요?" });
+    expect(chips()).toEqual(["네", "아니요"]);
+    say(ws, "네");
+    expect(ws.sent).toContainEqual({ id: 1, result: { answer: "Yes" } });
+    for (const [id, said] of [[2, "두 번째"], [3, "2번"], [4, "둘"]]) {
+      ws.receive({ id, type: "ask_user", yes_no: false, question: "언제? 오전; 오후; 저녁" });
+      say(ws, said);
+      expect(ws.sent).toContainEqual({ id, result: { answer: "오후" } });
+    }
+    say(ws, "멈춰!");
+    expect(ws.sent).toContainEqual({ type: "user_said", text: "멈춰!" });
+  });
+
+  test("help is in the chosen language", () => {
+    const { ws } = loadPanel();
+    ws.open();
+    ws.receive({ type: "language", lang: "es" });
+    say(ws, "ayuda");
+    jest.advanceTimersByTime(200);
+    expect(sub()).toMatch(/^Di lo que quieres hacer/);
+  });
+});

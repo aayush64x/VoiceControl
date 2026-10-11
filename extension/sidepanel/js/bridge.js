@@ -36,6 +36,26 @@
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
 
+  /* ---------------- Language: English, Spanish, Korean ---------------- */
+  // VOYA listens, asks and replies in this language; web pages stay as they are.
+
+  const SPEECH_LANG = { en: 'en-US', es: 'es-US', ko: 'ko-KR' };
+  const languagePicker = $('set-language');
+  let lang = 'en';
+  try { lang = localStorage.getItem('voya:lang') || 'en'; } catch { /* storage blocked */ }
+  if (!SPEECH_LANG[lang]) lang = 'en';
+  if (languagePicker) languagePicker.value = lang;
+
+  function setLanguage(next, { fromBackend = false } = {}) {
+    if (!SPEECH_LANG[next]) return;
+    lang = next;
+    document.documentElement.lang = next;
+    if (languagePicker) languagePicker.value = next;
+    try { localStorage.setItem('voya:lang', next); } catch { /* storage blocked */ }
+    if (!fromBackend) send({ type: 'set_language', lang: next });
+  }
+  if (languagePicker) languagePicker.addEventListener('change', () => setLanguage(languagePicker.value));
+
   function connectWs() {
     if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
     ws = new WebSocket(WS_URL);
@@ -43,6 +63,7 @@
     ws.onopen = () => {
       wsConnected = true;
       P.setConnection('online');
+      send({ type: 'set_language', lang }); // the backend forgets it when restarted
       if (P.state === 'idle' || P.state === 'error') P.setState('idle');
       startMicIfShortcutOpenedPanel();
     };
@@ -210,27 +231,46 @@
   //  - backend ones affect the agent: sent as commands
   //  - local ones only affect the panel: handled here, nothing is sent
 
+  // Same cleanup as the backend: lowercase, Spanish accents removed, punctuation
+  // dropped, repeats collapsed. Hangul is kept whole (NFC) so Korean matches.
   function controlPhrase(text) {
-    const words = (text || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean);
+    const t = (text || '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '').normalize('NFC');
+    const words = t.replace(/[^\p{L}\p{N} ]/gu, ' ').split(/\s+/).filter(Boolean);
     return words.filter((w, i) => i === 0 || w !== words[i - 1]).join(' ');
   }
 
+  // English, Spanish (accents removed) and Korean; must match backend/server.py
   const BACKEND_CONTROL = new Set([
     'stop', 'stop it', 'stop that', 'halt', 'never mind', 'nevermind',
     'stop everything', 'stop all', 'stop all of it', 'start over', 'reset',
     'cancel', 'cancel that', 'cancel it',
+    'para', 'detente', 'alto', 'basta', 'parar', 'para todo', 'deten todo', 'parar todo', 'detener todo',
+    'empieza de nuevo', 'empezar de nuevo', 'reinicia', 'reiniciar', 'cancela', 'cancelar', 'cancelalo',
+    '멈춰', '멈춰줘', '그만', '그만해', '정지', '중지', '모두 멈춰', '전부 멈춰', '다 멈춰',
+    '다시 시작', '처음부터', '처음부터 다시', '취소', '취소해', '취소해줘',
   ]);
-  const QUIET = new Set(['quiet', 'be quiet', 'stop talking', 'shut up', 'silence', 'hush']);
-  const REPEAT = new Set(['repeat', 'repeat that', 'say that again', 'again', 'what did you say']);
-  const HELP = new Set(['help', 'what can i say', 'commands', 'what can you do']);
+  const QUIET = new Set(['quiet', 'be quiet', 'stop talking', 'shut up', 'silence', 'hush',
+    'silencio', 'callate', 'no hables', '조용히', '조용히 해', '말하지 마']);
+  const REPEAT = new Set(['repeat', 'repeat that', 'say that again', 'again', 'what did you say',
+    'repite', 'repitelo', 'otra vez', 'que dijiste', '다시 말해줘', '다시 말해', '반복', '뭐라고']);
+  const HELP = new Set(['help', 'what can i say', 'commands', 'what can you do',
+    'ayuda', 'que puedo decir', 'comandos', '도움말', '도와줘', '뭐라고 말할 수 있어']);
 
   function isStopCommand(text) {
     return BACKEND_CONTROL.has(controlPhrase(text));
   }
 
-  const HELP_TEXT = 'Say what you want done, like \u201Cwhat benefits do I qualify for\u201D. Control words: '
-    + 'stop, stop everything, cancel, quiet, repeat, help, and start over. '
-    + 'Settings: settings overlay on or off, settings speak on or off.';
+  const HELP_TEXTS = {
+    en: 'Say what you want done, like \u201Cwhat benefits do I qualify for\u201D. Control words: '
+      + 'stop, stop everything, cancel, quiet, repeat, help, and start over. '
+      + 'Settings: settings overlay on or off, settings speak on or off, settings language Spanish or Korean.',
+    es: 'Di lo que quieres hacer, por ejemplo \u201C\u00bfa qu\u00e9 beneficios califico?\u201D. Palabras de control: '
+      + 'para, para todo, cancela, silencio, repite, ayuda y empieza de nuevo. '
+      + 'Para cambiar el idioma: idioma ingl\u00e9s o idioma coreano.',
+    ko: '\uc6d0\ud558\ub294 \uc77c\uc744 \ub9d0\uc500\ud558\uc138\uc694. \uc608: \u201C\ub0b4\uac00 \ubc1b\uc744 \uc218 \uc788\ub294 \ud61c\ud0dd\uc740?\u201D '
+      + '\uc81c\uc5b4 \ub9d0: \uba48\ucdb0, \ubaa8\ub450 \uba48\ucdb0, \ucde8\uc18c, \uc870\uc6a9\ud788, \ub2e4\uc2dc \ub9d0\ud574\uc918, \ub3c4\uc6c0\ub9d0, \ucc98\uc74c\ubd80\ud130. '
+      + '\uc5b8\uc5b4 \ubc14\uafb8\uae30: \uc5b8\uc5b4 \uc601\uc5b4, \uc5b8\uc5b4 \uc2a4\ud398\uc778\uc5b4.',
+  };
 
   let lastReply = '';
 
@@ -255,34 +295,54 @@
       return true;
     }
     if (HELP.has(phrase)) {
-      P.setState('done', { eyebrow: 'Help', title: 'What you can say', sub: HELP_TEXT });
-      speak(HELP_TEXT, true);
+      const help = HELP_TEXTS[lang] || HELP_TEXTS.en;
+      P.setState('done', { eyebrow: 'Help', title: 'What you can say', sub: help });
+      speak(help, true);
       return true;
     }
     return false;
   }
 
-  const NUMBER_WORDS = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
-  const ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth'];
+  // Number words 1-9 in English, Spanish and Korean (both Korean counting systems)
+  const NUMBER_WORDS = [
+    ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'],
+    ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth'],
+    ['uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve'],
+    ['una', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve'],
+    ['primero', 'segundo', 'tercero', 'cuarto', 'quinto', 'sexto', 'septimo', 'octavo', 'noveno'],
+    ['primera', 'segunda', 'tercera', 'cuarta', 'quinta', 'sexta', 'septima', 'octava', 'novena'],
+    ['일', '이', '삼', '사', '오', '육', '칠', '팔', '구'],
+    ['하나', '둘', '셋', '넷', '다섯', '여섯', '일곱', '여덟', '아홉'],
+    ['첫번째', '두번째', '세번째', '네번째', '다섯번째', '여섯번째', '일곱번째', '여덟번째', '아홉번째'],
+  ];
 
-  // "two", "number 2", "option three", "the second one" -> the 2nd listed answer
+  // "two", "number 2", "the second one", "opción dos", "la segunda", "2번", "두 번째" -> the 2nd answer
   function optionByNumber(text, options) {
     if (!options || !options.length) return null;
-    const t = text.toLowerCase().replace(/[.!?]/g, '').trim()
-      .replace(/^(number|option|answer|choice|the)\s+/, '').replace(/\s+(one|option|answer)$/, '');
-    let n = /^\d$/.test(t) ? Number(t) : 0;
-    if (!n) n = NUMBER_WORDS.indexOf(t) + 1 || ORDINALS.indexOf(t) + 1;
+    let t = controlPhrase(text)
+      .replace(/^(number|option|answer|choice|the|numero|opcion|respuesta|la|el|번호)\s+/, '')
+      .replace(/\s+(one|option|answer|opcion)$/, '');
+    const korean = t.replace(/\s+/g, '');                     // "두 번째" -> "두번째"
+    const digit = /^(\d)(번|번째)?$/.exec(korean);            // "2", "2번", "2번째"
+    let n = digit ? Number(digit[1]) : 0;
+    for (const list of NUMBER_WORDS) {
+      if (n) break;
+      n = list.indexOf(t) + 1 || list.indexOf(korean) + 1 || list.indexOf(korean.replace(/번$/, '')) + 1;
+    }
     return n >= 1 && n <= options.length ? options[n - 1] : null;
   }
+
+  const YES = /^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|correct|right|submit|si|claro|vale|de acuerdo|correcto|adelante|네|예|응|좋아|그래|맞아)(\s|$)/;
+  const NO = /^(no|nope|nah|dont|don t|do not|not now|cancel|para nada|cancela|아니요|아니오|아뇨|아니|싫어|취소)(\s|$)/;
 
   // Spoken answers in everyday words: numbers pick a listed option; yes/no map onto Yes / No
   function normalizeAnswer(text, yesNo, options) {
     const picked = optionByNumber(text, options);
     if (picked) return picked;
     if (!yesNo) return text;
-    const t = text.toLowerCase().replace(/[.!?]/g, '').trim();
-    if (/^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|correct|right|submit)\b/.test(t)) return 'Yes';
-    if (/^(no|nope|nah|don't|do not|not now|cancel)\b/.test(t)) return 'No';
+    const t = controlPhrase(text);
+    if (YES.test(t)) return 'Yes';
+    if (NO.test(t)) return 'No';
     return text;
   }
 
@@ -314,7 +374,8 @@
 
   let question = null; // { reply, yesNo, view }
 
-  const SUBMIT_QUESTION = /\b(submit|send|go ahead|place (the )?order|pay|confirm|sign up)\b/i;
+  const SUBMIT_QUESTION = /\b(submit|send|go ahead|place (the )?order|pay|confirm|sign up)\b|enviar|env[ií]o|someter|confirmar|pagar|제출|보낼|보내|결제|신청|가입/i;
+  const YES_NO_CHIPS = { en: ['Yes', 'No'], es: ['Sí', 'No'], ko: ['네', '아니요'] };
 
   // Turn the agent's question into a panel state:
   //  - "Should I submit?"            -> confirm (Submit / Cancel)
@@ -325,7 +386,7 @@
       return { name: 'confirm', data: { title: text, summary: [] } };
     }
     if (yesNo) {
-      return { name: 'ask', data: { title: text, sub: 'Say yes or no, or tap an answer.', options: ['Yes', 'No'] } };
+      return { name: 'ask', data: { title: text, sub: 'Say yes or no, or its number.', options: YES_NO_CHIPS[lang] || YES_NO_CHIPS.en } };
     }
     const q = text.indexOf('?');
     if (q > 0 && q < text.length - 1) {
@@ -501,6 +562,9 @@
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.rate = rateSlider ? Number(rateSlider.value) || 1.3 : 1.3;
+    u.lang = SPEECH_LANG[lang] || 'en-US';
+    const voice = speechSynthesis.getVoices().find((v) => v.lang && v.lang.startsWith(u.lang.slice(0, 2)));
+    if (voice) u.voice = voice; // if the computer has no voice for it, Chrome tries its default
     speechSynthesis.speak(u);
   }
 
@@ -557,7 +621,7 @@
 
   function showResult(text) {
     const reply = cleanReply(text);
-    if (/^(Stopped|Nothing to stop|Starting over)/.test(reply)) {
+    if (/^(Stopped|Nothing to stop|Starting over|Detenido|No hay nada que detener|Empezando de nuevo|중지했습니다|멈출 작업이 없습니다|처음부터 다시 시작합니다|모두 멈췄습니다)/.test(reply)) {
       P.setState('idle', { title: reply.split(/[:.]/)[0] + '.', sub: reply.includes(':') ? reply : 'Press to talk when you\u2019re ready.' });
     } else if (/^(error|couldn't|could not|i couldn't|i was unable|unable)\b/i.test(reply)) {
       P.setState('error', { sub: reply });
@@ -590,6 +654,7 @@
       case 'site': renderSiteInfo(msg); return;
       case 'set_overlays': setNumbers(!!msg.on); return;
       case 'set_speak': setAlwaysSpeak(!!msg.on); return;
+      case 'language': setLanguage(msg.lang, { fromBackend: true }); return;
 
       case 'queued':
         P.setProgress(`Next up: “${msg.text}”`);

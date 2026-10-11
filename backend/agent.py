@@ -153,8 +153,22 @@ def _parse_setting(text):
     return (topic, None, state) if topic and state else None
 
 
+# "settings language Spanish", "language Korean", "idioma español", "언어 한국어"
+_LANGUAGE_NAMES = {
+    "english": "en", "ingles": "en", "inglés": "en", "영어": "en",
+    "spanish": "es", "espanol": "es", "español": "es", "스페인어": "es",
+    "korean": "ko", "coreano": "ko", "한국어": "ko", "한국말": "ko",
+}
+_LANGUAGE_COMMAND = re.compile(
+    r"^(?:settings?|ajustes|configuraci[oó]n|설정)?[:,]?\s*(?:language|idioma|언어)\s+(\S+)$", re.IGNORECASE)
+
+
 def try_direct(text):
     stripped = text.strip().rstrip(".!")
+
+    m = _LANGUAGE_COMMAND.match(stripped)
+    if m and m.group(1).lower() in _LANGUAGE_NAMES:
+        return ("language", None, _LANGUAGE_NAMES[m.group(1).lower()])
 
     setting = _parse_setting(stripped)
     if setting:
@@ -448,14 +462,27 @@ _SUBMIT_WORDS = re.compile(
     r"checkout|check out|book|donate|post|publish|delete|finish|complete)\b", re.IGNORECASE)
 _NOT_SUBMIT = re.compile(r"\b(next|continue|start|begin|search|back|previous|learn|more|details|menu)\b",
                          re.IGNORECASE)
-_SUBMIT_QUESTION = re.compile(r"\b(submit|send|go ahead|place (the )?order|pay|confirm|sign up)\b", re.IGNORECASE)
+_SUBMIT_QUESTION = re.compile(
+    r"\b(submit|send|go ahead|place (the )?order|pay|confirm|sign up)\b"
+    r"|enviar|env[ií]o|env[ií]e|someter|confirmar|pagar|registrar"   # Spanish
+    r"|제출|보낼|보내|결제|신청|가입",                                  # Korean
+    re.IGNORECASE)
+
+_SAFETY_QUESTION = {
+    "en": 'Before I click "{label}": should I go ahead and submit?',
+    "es": 'Antes de hacer clic en "{label}": ¿lo envío?',
+    "ko": '"{label}" 버튼을 누르기 전에 확인할게요. 제출할까요?',
+}
 
 _submit_approved = False  # reset at the start of every task
 
 
 def _is_yes(answer):
-    return bool(re.match(r"^\s*(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|submit|send)\b",
-                         str(answer or ""), re.IGNORECASE))
+    return bool(re.match(
+        r"^\s*(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|submit|send"
+        r"|s[ií]|claro|vale|de acuerdo|adelante|env[ií]alo"
+        r"|네|예|응|좋아|그래|제출)(\b|$|\s|[.!,])",
+        str(answer or ""), re.IGNORECASE))
 
 
 def _is_submit_label(label):
@@ -490,7 +517,8 @@ def _guard_submit(event: BeforeToolCallEvent):
     print(f"[safety] holding click on {risky!r} until the user approves")
     _emit({"type": "step", "step_id": "safety", "tool": "safety", "status": "running",
            "input": f'"{risky}" — asking you first'})
-    reply = _bridge(server.ask_user(f'Before I click "{risky}": should I go ahead and submit?', True), timeout=125)
+    question = _SAFETY_QUESTION.get(server.language, _SAFETY_QUESTION["en"]).format(label=risky)
+    reply = _bridge(server.ask_user(question, True), timeout=125)
     if isinstance(reply, dict) and _is_yes(reply.get("answer")):
         _submit_approved = True
         _emit({"type": "step", "step_id": "safety", "tool": "safety", "status": "ok", "detail": "You approved it"})
@@ -941,6 +969,9 @@ def classify(text):
 
 async def _run_direct(text):
     action, element, value = try_direct(text)
+    if action == "language":
+        await server.set_language(value)
+        return {"en": "Language: English.", "es": "Idioma: español.", "ko": "언어: 한국어."}[value]
     if action == "speak":
         on = value == "on"
         await server._send_to_client({"type": "set_speak", "on": on})
@@ -1010,6 +1041,11 @@ def _with_location(text):
 
     Only the location — never the element list, whose numbers may be stale.
     """
+    lang = server.LANGUAGES.get(server.language, server.LANGUAGES["en"])["name"]
+    if server.language != "en":
+        text = (f"[The user speaks {lang}. Ask every question and give every reply in {lang}. "
+                f"When the page is in another language, translate its questions and options into {lang} "
+                f"when you ask, and map the user's {lang} answer back to the page's own option.]\n{text}")
     page = server.last_page or {}
     url = page.get("url")
     if page.get("unreadable"):
@@ -1053,7 +1089,7 @@ def _run_agent(text, tier):
         print(f"[strands] {stats['summary']}")
         _emit({"type": "stats", **stats})
     if getattr(response, "stop_reason", None) == "cancelled":
-        return f"Stopped: {text}"
+        return f"{ {'es': 'Detenido', 'ko': '중지했습니다'}.get(server.language, 'Stopped') }: {text}"
     return str(response)
 
 

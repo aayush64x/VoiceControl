@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import time
+import unicodedata
 
 import websockets
 
@@ -56,9 +57,46 @@ async def _send_to_client(obj):
         pass
 
 
+# Languages VOYA listens and speaks in. The web pages stay as they are (usually
+# English); the agent translates questions and maps answers back.
+LANGUAGES = {
+    "en": {"name": "English", "stt": "en-US"},
+    "es": {"name": "Spanish", "stt": "es-US"},
+    "ko": {"name": "Korean", "stt": "ko-KR"},
+}
+language = "en"
+
+
+async def set_language(lang):
+    """Switch the listening/speaking language and tell the panel."""
+    global language
+    if lang not in LANGUAGES:
+        return False
+    language = lang
+    print(f"[voice] Language: {LANGUAGES[lang]['name']}")
+    await _send_to_client({"type": "language", "lang": lang})
+    return True
+
+
+# Short system replies, in the user's language
+MESSAGES = {
+    "nothing": {"en": "Nothing to stop.", "es": "No hay nada que detener.", "ko": "멈출 작업이 없습니다."},
+    "stopped_all": {"en": "Stopped everything.", "es": "Detenido todo.", "ko": "모두 멈췄습니다."},
+    "start_over": {"en": "Starting over. What would you like to do?",
+                   "es": "Empezando de nuevo. ¿Qué quieres hacer?",
+                   "ko": "처음부터 다시 시작합니다. 무엇을 도와드릴까요?"},
+}
+
+
+def localized(key):
+    return MESSAGES[key].get(language, MESSAGES[key]["en"])
+
+
 _SPEECH_REQUEST = re.compile(
     r"\b(out loud|aloud|read (it|this|that|them)?\s*(to me|for me)|read (it|this|that) (out|to|for)|"
-    r"tell me out loud|say it|speak it)\b",
+    r"tell me out loud|say it|speak it)\b"
+    r"|en voz alta|l[eé]e(lo|melo|me)\b"   # Spanish: "léelo en voz alta"
+    r"|소리 ?내어|읽어 ?줘|읽어 ?주세요",     # Korean: "읽어줘"
     re.IGNORECASE,
 )
 
@@ -117,14 +155,38 @@ def _cancel_open_question():
 # Control words: instant, no AI, work at any moment (even mid-task or while a
 # question is open). Only these exact short phrases count, so "cancel my
 # subscription" is still a normal request.
-STOP_ONE = {"stop", "stop it", "stop that", "halt", "never mind", "nevermind"}
-STOP_ALL = {"stop everything", "stop all", "stop all of it", "start over", "reset"}
-CANCEL = {"cancel", "cancel that", "cancel it"}
+# English, Spanish (accents removed) and Korean.
+STOP_ONE = {
+    "stop", "stop it", "stop that", "halt", "never mind", "nevermind",
+    "para", "detente", "alto", "basta", "parar",
+    "멈춰", "멈춰줘", "그만", "그만해", "정지", "중지",
+}
+START_OVER = {
+    "start over", "reset",
+    "empieza de nuevo", "empezar de nuevo", "reinicia", "reiniciar",
+    "다시 시작", "처음부터", "처음부터 다시",
+}
+STOP_ALL = {
+    "stop everything", "stop all", "stop all of it",
+    "para todo", "deten todo", "parar todo", "detener todo",
+    "모두 멈춰", "전부 멈춰", "다 멈춰",
+} | START_OVER
+CANCEL = {
+    "cancel", "cancel that", "cancel it",
+    "cancela", "cancelar", "cancelalo",
+    "취소", "취소해", "취소해줘",
+}
 
 
 def control_phrase(text):
-    """'Stop!' / 'stop stop' / 'Stop everything.' -> 'stop' / 'stop' / 'stop everything'."""
-    words = re.sub(r"[^a-z ]", " ", (text or "").lower()).split()
+    """'Stop!' / 'stop stop' / '¡Detén todo!' / '멈춰!' -> 'stop' / 'stop' / 'deten todo' / '멈춰'.
+
+    Lowercase, accents removed (Spanish), punctuation dropped, repeated words collapsed.
+    Hangul is kept whole (NFC), so Korean phrases still match.
+    """
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    t = unicodedata.normalize("NFC", "".join(c for c in t if not unicodedata.combining(c)))
+    words = re.sub(r"[^\w ]|_", " ", t).split()
     deduped = [w for i, w in enumerate(words) if i == 0 or w != words[i - 1]]
     return " ".join(deduped)
 
@@ -146,7 +208,7 @@ async def stop_current():
     if _busy and on_cancel:
         on_cancel()  # the cancelled task replies "Stopped: ..." itself when it winds down
     else:
-        await _send_to_client({"type": "agent_response", "text": "Nothing to stop."})
+        await _send_to_client({"type": "agent_response", "text": localized("nothing")})
     print("[command] Stop — halted the current task")
 
 
@@ -160,9 +222,9 @@ async def stop_everything(start_over=False):
     if _busy and on_cancel:
         on_cancel()
     elif start_over:
-        await _send_to_client({"type": "agent_response", "text": "Starting over. What would you like to do?"})
+        await _send_to_client({"type": "agent_response", "text": localized("start_over")})
     else:
-        await _send_to_client({"type": "agent_response", "text": "Stopped everything."})
+        await _send_to_client({"type": "agent_response", "text": localized("stopped_all")})
     print(f"[command] Stop everything — halted the current task, dropped {dropped} queued")
 
 
@@ -193,7 +255,7 @@ async def handle_control(text):
     if phrase in STOP_ONE:
         await stop_current()
     elif phrase in STOP_ALL:
-        await stop_everything(start_over=phrase in ("start over", "reset"))
+        await stop_everything(start_over=phrase in START_OVER)
     elif phrase in CANCEL:
         await cancel()
     else:
@@ -251,7 +313,7 @@ async def handler(websocket):
             if msg_type == "voice_start":
                 if _transcriber and _transcriber.running:
                     await _transcriber.stop(transcribe=False)
-                _transcriber = VoiceTranscriber()
+                _transcriber = VoiceTranscriber(language=LANGUAGES[language]["stt"])
 
                 async def on_transcript(text, is_final, error=None):
                     if error:
@@ -286,6 +348,10 @@ async def handler(websocket):
                 text = msg.get("text", "").strip()
                 if text and not await handle_control(text):
                     await enqueue_command(text)
+                continue
+
+            if msg_type == "set_language":
+                await set_language(msg.get("lang"))
                 continue
 
             if msg.get("id") in pending:

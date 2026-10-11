@@ -719,3 +719,39 @@ async def test_voice_level_streams_while_recording(monkeypatch):
     await asyncio.wait_for(task, timeout=1)
     assert {"type": "level", "value": 0.42} in sent
     assert sent[-1] == {"type": "level", "value": None}
+
+
+def test_control_words_in_spanish_and_korean():
+    one, all_, cancel = server.STOP_ONE, server.STOP_ALL, server.CANCEL
+    assert server.control_phrase("¡Para!") in one
+    assert server.control_phrase("¡Detén todo!") in all_
+    assert server.control_phrase("Empieza de nuevo.") in server.START_OVER
+    assert server.control_phrase("Cancélalo") in cancel
+    assert server.control_phrase("멈춰!") in one
+    assert server.control_phrase("모두 멈춰") in all_
+    assert server.control_phrase("처음부터 다시") in server.START_OVER
+    assert server.control_phrase("취소해줘") in cancel
+    assert server.control_phrase("para mi mamá") not in one | all_ | cancel
+
+
+@pytest.mark.asyncio
+async def test_set_language_from_panel_and_listening_language(monkeypatch):
+    sent = []
+
+    async def to_panel(msg):
+        sent.append(msg)
+
+    monkeypatch.setattr(server, "_send_to_client", to_panel)
+    assert await server.set_language("ko")
+    assert server.language == "ko"
+    assert sent == [{"type": "language", "lang": "ko"}]
+    assert server.LANGUAGES[server.language]["stt"] == "ko-KR"
+    assert server.localized("nothing") == "멈출 작업이 없습니다."
+    assert not await server.set_language("xx")
+    await server.set_language("en")
+
+
+def test_wants_speech_in_other_languages():
+    assert server.wants_speech("léelo en voz alta")
+    assert server.wants_speech("읽어줘")
+    assert not server.wants_speech("busca videos de gatos")

@@ -829,3 +829,39 @@ class TestTaskStats:
         assert s["model_calls"] == 14 and s["tool_calls"] == 13
         assert s["cached_pct"] == 78  # 9000 of 11600 prompt tokens
         assert s["summary"] == "Strands · Claude Sonnet · 14 model calls · 13 tool calls · 12.4k tokens · 78% cached · 38s"
+
+
+class TestLanguages:
+    def test_language_commands(self):
+        assert try_direct("settings language Spanish") == ("language", None, "es")
+        assert try_direct("idioma español") == ("language", None, "es")
+        assert try_direct("설정 언어 한국어") == ("language", None, "ko")
+        assert try_direct("language english.") == ("language", None, "en")
+        assert try_direct("settings language klingon") is None
+
+    def test_agent_is_told_to_translate(self, monkeypatch):
+        import server
+        from agent import _with_location
+        monkeypatch.setattr(server, "language", "es")
+        server.last_page = {"title": "SSA", "url": "https://www.ssa.gov/"}
+        out = _with_location("¿A qué beneficios califico?")
+        assert out.startswith("[You are on: SSA")
+        assert "\n[The user speaks Spanish. Ask every question and give every reply in Spanish." in out
+        assert "translate its questions" in out
+        monkeypatch.setattr(server, "language", "en")
+        assert "[The user speaks" not in _with_location("hi")
+        server.last_page = None
+
+    def test_safety_yes_in_every_language(self):
+        from agent import _is_yes
+        for yes in ["Yes", "Sí", "si", "claro", "네", "예.", "응"]:
+            assert _is_yes(yes), yes
+        for no in ["No", "아니요", "Sicily", "neither"]:
+            assert not _is_yes(no), no
+
+    def test_safety_question_in_korean(self, monkeypatch):
+        import agent
+        import server
+        monkeypatch.setattr(server, "language", "ko")
+        q = agent._SAFETY_QUESTION[server.language].format(label="제출")
+        assert q.startswith('"제출" 버튼을 누르기 전에') and agent._SUBMIT_QUESTION.search(q)

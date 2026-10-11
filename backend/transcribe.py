@@ -29,8 +29,9 @@ def voice_level(samples):
 
 
 class VoiceTranscriber:
-    def __init__(self, sample_rate=16000):
+    def __init__(self, sample_rate=16000, language="en-US"):
         self._sample_rate = sample_rate
+        self.language = language  # Google speech language code: en-US, es-US, ko-KR
         self._frames = []
         self._callback = None
         self.running = False
@@ -89,7 +90,8 @@ class VoiceTranscriber:
         loop = asyncio.get_running_loop()
         try:
             # recognize_google is a blocking HTTP call — keep it off the event loop
-            text = await loop.run_in_executor(None, self._recognizer.recognize_google, audio)
+            text = await loop.run_in_executor(
+                None, lambda: self._recognizer.recognize_google(audio, language=self.language))
         except sr.UnknownValueError:
             await self._callback("", True, error="Could not understand audio")
             return
