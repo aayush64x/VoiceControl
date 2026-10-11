@@ -103,6 +103,11 @@ function connectWs() {
       return;
     }
 
+    if (msg.type === "site") {
+      renderSiteInfo(msg);
+      return;
+    }
+
     if (msg.type === "queued") {
       const ahead = msg.ahead === 1 ? "1 command" : msg.ahead + " commands";
       cmdResult.textContent += "\n\nQueued: " + msg.text + " (after " + ahead + ")";
@@ -403,6 +408,24 @@ cmdInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") runCommand();
 });
 
+// --- What site memory knows about the current website ---
+const siteInfoEl = document.getElementById("site-info");
+
+function renderSiteInfo(site) {
+  siteInfoEl.textContent = "";
+  if (!site.known || !site.kind) {
+    const span = document.createElement("span");
+    span.className = "learning";
+    span.textContent = `Learning ${site.domain}…`;
+    siteInfoEl.appendChild(span);
+    return;
+  }
+  const parts = [`Site memory: ${site.name}`, site.kind];
+  if (site.search) parts.push("search box ✓");
+  if (site.chat) parts.push("chat box ✓");
+  siteInfoEl.textContent = parts.join(" · ");
+}
+
 // --- Agent step list (one row per Strands tool call) ---
 const stepsSection = document.getElementById("steps-section");
 const stepsEl = document.getElementById("steps");
@@ -411,6 +434,7 @@ const STEP_NAMES = {
   read_page: "Read page",
   read_text: "Read text",
   act: "Act",
+  search: "Search",
   fill_form: "Fill form",
   ask_user: "Ask you",
   search_memory: "Recall saved details",

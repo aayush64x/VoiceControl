@@ -34,6 +34,7 @@ UNREACHABLE = "Could not reach"  # prefix of the extension's "page not reachable
 
 on_user_input = None
 on_cancel = None  # set by agent.py — stops the running agent task
+on_page_ready = None  # set by agent.py — async hook to learn new sites
 _transcriber = None
 
 # Commands run one at a time, in order. A command sent while another is
@@ -220,6 +221,10 @@ async def handler(websocket):
                 _page_ready_count += 1
                 _loading = False
                 print(f"[bridge] Page ready: {msg.get('title', '?')} ({msg.get('count', 0)} elements)")
+                if on_page_ready:
+                    task = asyncio.create_task(on_page_ready(msg))
+                    _tasks.add(task)
+                    task.add_done_callback(_tasks.discard)
     except websockets.ConnectionClosed:
         pass
     finally:
@@ -348,8 +353,10 @@ async def wait_for_page(ready_before, loading_before, start_wait=None):
         await asyncio.sleep(0.05)
 
 
-async def do_action(action, element=None, value=None, submit=False):
+async def do_action(action, element=None, value=None, submit=False, selector=None):
     kwargs = {"action": action}
+    if selector:
+        kwargs["selector"] = selector
     if element is not None:
         kwargs["element"] = element
     if value is not None:
@@ -365,6 +372,11 @@ async def do_action(action, element=None, value=None, submit=False):
         # The page was replaced while we were acting on it — not a real failure
         await wait_while_loading()
         print("[bridge] page changed mid-action")
+        if action in ("search", "ask"):
+            # Submitting a search/question loaded the results page before the
+            # page script could reply — that's the search succeeding
+            return {"success": True, "action": action, "submitted": True, "navigated": True,
+                    "page": "loaded", "page_title": (last_page or {}).get("title", "")}
         return {"error": "A new page started loading before this action ran. Call read_page to see "
                          "the new page, and repeat the action only if it is still needed."}
 

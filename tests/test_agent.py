@@ -6,7 +6,18 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
-from agent import try_direct, classify
+import pytest
+
+from agent import try_direct, classify, parse_site_command
+
+
+@pytest.fixture(autouse=True)
+def isolated_site_memory(tmp_path):
+    """Never read or write the real learned-sites file during tests."""
+    import site_memory
+    site_memory.reset(str(tmp_path / "sites.json"))
+    yield
+    site_memory.reset(site_memory.PATH)
 
 
 class TestTryDirect:
@@ -65,7 +76,8 @@ class TestTryDirect:
         assert try_direct("new tab youtube") == ("new_tab", None, "https://youtube.com")
 
     def test_new_tab_twitter(self):
-        assert try_direct("new tab twitter") == ("new_tab", None, "https://x.com")
+        # No site list any more: unknown names become name.com (twitter.com redirects to x.com)
+        assert try_direct("new tab twitter") == ("new_tab", None, "https://twitter.com")
 
     def test_new_tab_url(self):
         assert try_direct("new tab weather.gov") == ("new_tab", None, "https://weather.gov")
@@ -148,57 +160,171 @@ class TestUserDetailsFile:
         assert details["last_name"] == "Rivera"
 
 
-class TestSearchShortcuts:
-    """Searches on known sites open the results URL directly — no model call."""
+class TestParseSiteCommand:
+    """"search / play / ask X" commands — what to do, not which site's URL."""
 
-    def setup_method(self):
-        import server
-        self.server = server
-        server.last_page = None
+    def test_search_on_named_site(self):
+        assert parse_site_command("search cat videos on youtube") == {
+            "action": "search", "site": "youtube", "query": "cat videos", "verb": "search"}
 
-    def test_search_on_youtube(self):
-        assert try_direct("search cat videos on youtube") == (
-            "open", None, "https://www.youtube.com/results?search_query=cat+videos")
-
-    def test_search_for_on_google(self):
-        assert try_direct("search for weather in Kansas City on Google") == (
-            "open", None, "https://www.google.com/search?q=weather+in+Kansas+City")
-
-    def test_play_on_youtube(self):
-        assert try_direct("play dark souls 3 on youtube")[2].endswith("search_query=dark+souls+3")
+    def test_play_on_named_site(self):
+        cmd = parse_site_command("play dark souls 3 on YouTube.")
+        assert cmd["verb"] == "play" and cmd["query"] == "dark souls 3" and cmd["site"] == "YouTube"
 
     def test_search_site_for(self):
-        assert try_direct("search amazon for wheelchair cushion") == (
-            "open", None, "https://www.amazon.com/s?k=wheelchair+cushion")
+        assert parse_site_command("search etsy for wooden ramps") == {
+            "action": "search", "site": "etsy", "query": "wooden ramps", "verb": "search"}
 
-    def test_ask_chatgpt(self):
-        assert try_direct("ask ChatGPT what is the biggest animal?") == (
-            "open", None, "https://chatgpt.com/?q=what+is+the+biggest+animal%3F")
+    def test_bare_search_has_no_site(self):
+        assert parse_site_command("search for weather in Kansas City") == {
+            "action": "search", "site": None, "query": "weather in Kansas City", "verb": "search"}
+
+    def test_ask_named_assistant(self):
+        assert parse_site_command("ask ChatGPT what is the biggest animal?") == {
+            "action": "ask", "site": "ChatGPT", "query": "what is the biggest animal?", "verb": "ask"}
 
     def test_ask_chat_gpt_two_words(self):
-        assert try_direct("ask chat gpt to write a poem")[2] == "https://chatgpt.com/?q=write+a+poem"
+        assert parse_site_command("ask chat gpt to write a poem")["query"] == "write a poem"
 
-    def test_trailing_period_from_voice(self):
-        assert try_direct("search cats on youtube.")[2].endswith("search_query=cats")
+    def test_bare_ask(self):
+        assert parse_site_command("ask what time is sunset")["action"] == "ask"
 
-    def test_bare_search_uses_current_site(self):
-        self.server.last_page = {"url": "https://www.youtube.com/watch?v=abc"}
-        assert try_direct("search for dark souls 3")[2] == (
-            "https://www.youtube.com/results?search_query=dark+souls+3")
+    def test_not_site_commands(self):
+        for text in ["find the login button on this page", "play it", "play the first video",
+                     "click the search button", "scroll down", "weather in Kansas City"]:
+            assert parse_site_command(text) is None, text
 
-    def test_bare_search_on_unknown_site_goes_to_agent(self):
-        self.server.last_page = {"url": "https://www.weather.gov/"}
-        assert try_direct("search for weather in Kansas City") is None
-        assert classify("search for weather in Kansas City") == "sonnet"
 
-    def test_bare_search_no_page_goes_to_agent(self):
-        assert try_direct("search for weather in Kansas City") is None
+@pytest.fixture
+def sites(tmp_path):
+    import site_memory
+    site_memory.reset(str(tmp_path / "sites.json"))
+    yield site_memory
+    site_memory.reset()
 
-    def test_find_on_this_page_not_a_shortcut(self):
-        assert try_direct("find the login button on this page") is None
 
-    def test_search_shortcut_classified_direct(self):
-        assert classify("search cat videos on youtube") == "direct"
+class TestSiteMemory:
+    def test_domain_of(self, sites):
+        assert sites.domain_of("https://www.youtube.com/watch?v=1") == "youtube.com"
+        assert sites.domain_of("https://forecast.weather.gov/x") == "forecast.weather.gov"
+        assert sites.domain_of(None) == ""
+
+    def test_remember_and_persist(self, sites):
+        sites.remember_elements("youtube.com", {"search": {"selector": "input[name=\"search_query\"]", "label": "Search"}})
+        sites.remember_profile("youtube.com", {"name": "YouTube", "type": "video", "summary": "Watch videos",
+                                               "after_search": "open_result"})
+        sites.reset()  # reload from disk
+        entry = sites.get("youtube.com")
+        assert entry["search"]["selector"] == 'input[name="search_query"]'
+        assert entry["type"] == "video"
+        assert not sites.needs_learning("youtube.com")
+
+    def test_missing_element_does_not_erase_known(self, sites):
+        sites.remember_elements("a.com", {"search": {"selector": "#q", "label": "Search"}})
+        sites.remember_elements("a.com", {"search": None, "chat": None})
+        assert sites.get("a.com")["search"]["selector"] == "#q"
+
+    def test_forget_element(self, sites):
+        sites.remember_elements("a.com", {"search": {"selector": "#q", "label": "Search"}})
+        sites.forget_element("a.com", "search")
+        assert "search" not in sites.get("a.com")
+
+    def test_find_by_name_and_guess(self, sites):
+        sites.remember_profile("chatgpt.com", {"name": "ChatGPT", "type": "chat assistant"})
+        assert sites.find_by_name("chat gpt") == "chatgpt.com"
+        assert sites.find_by_name("ChatGPT") == "chatgpt.com"
+        assert sites.find_by_name("etsy") is None
+        assert sites.guess_domain("etsy") == "etsy.com"
+        assert sites.guess_domain("weather.gov") == "weather.gov"
+
+    def test_describe_for_prompt(self, sites):
+        sites.remember_elements("weather.gov", {"search": {"selector": "#inputstring", "label": "City, St"}})
+        sites.remember_profile("weather.gov", {"name": "National Weather Service", "type": "weather",
+                                               "after_search": "read_text"})
+        text = sites.describe("weather.gov")
+        assert "National Weather Service" in text and "weather" in text
+        assert 'act("search"' in text and "read_text" in text
+        assert sites.describe("unknown.com") == ""
+
+
+class TestInstantPath:
+    """The instant path uses site memory and falls back sensibly — browser faked."""
+
+    def _fake(self, monkeypatch, current_url, responses):
+        import agent
+        import server
+        calls = []
+
+        async def do_action(action, element=None, value=None, submit=False, selector=None):
+            calls.append((action, value, selector))
+            return responses(action, value, selector)
+
+        monkeypatch.setattr(server, "do_action", do_action)
+        monkeypatch.setattr(agent, "_emit", lambda msg: None)
+        server.last_page = {"url": current_url, "title": "T"}
+        return agent, calls
+
+    def test_uses_remembered_search_box(self, sites, monkeypatch):
+        import asyncio
+        sites.remember_elements("youtube.com", {"search": {"selector": "#search", "label": "Search"}})
+        sites.remember_profile("youtube.com", {"name": "YouTube", "type": "video"})
+        agent, calls = self._fake(monkeypatch, "https://www.youtube.com/",
+                                  lambda a, v, sel: {"success": True, "selector": "#search", "found": "memory"})
+        out = asyncio.run(agent._run_site_command(parse_site_command("search cat videos")))
+        assert out == "Searched YouTube for cat videos."
+        assert calls == [("search", "cat videos", "#search")]
+
+    def test_named_site_opens_it_first(self, sites, monkeypatch):
+        import asyncio
+        agent, calls = self._fake(monkeypatch, "https://www.google.com/",
+                                  lambda a, v, sel: {"success": True, "selector": "input[name=\"q\"]"})
+        out = asyncio.run(agent._run_site_command(parse_site_command("search wooden ramps on etsy")))
+        assert calls[0] == ("open", "https://etsy.com", None)
+        assert calls[1][0] == "search"
+        assert "etsy" in out.lower()
+        # What worked is remembered for next time
+        import server
+        server.last_page = {"url": "https://etsy.com/"}
+
+    def test_play_hands_off_to_agent_to_open_video(self, sites, monkeypatch):
+        import asyncio
+        agent, _ = self._fake(monkeypatch, "https://www.youtube.com/",
+                              lambda a, v, sel: {"success": True, "selector": "#search"})
+        out = asyncio.run(agent._run_site_command(parse_site_command("play wheelchair transfers")))
+        assert out[0] == "agent" and "wheelchair transfers" in out[1]
+
+    def test_no_search_box_falls_back_to_google(self, sites, monkeypatch):
+        import asyncio
+
+        def responses(action, value, selector):
+            if action == "search":
+                return {"success": False, "error": "No search box found on this page."}
+            return {"success": True}
+
+        agent, calls = self._fake(monkeypatch, "https://example.org/", responses)
+        out = asyncio.run(agent._run_site_command(parse_site_command("search accessible vans")))
+        assert out == "Searched Google for accessible vans."
+        assert calls[-1] == ("open", "https://www.google.com/search?q=accessible+vans", None)
+
+    def test_weather_site_search_goes_to_agent(self, sites, monkeypatch):
+        import asyncio
+        sites.remember_profile("weather.gov", {"name": "NWS", "type": "weather"})
+        agent, calls = self._fake(monkeypatch, "https://www.weather.gov/", lambda *a: {"success": True})
+        assert asyncio.run(agent._run_site_command(parse_site_command("search for Kansas City"))) is None
+        assert calls == []
+
+    def test_stale_remembered_box_is_forgotten(self, sites, monkeypatch):
+        import asyncio
+        sites.remember_elements("a.com", {"search": {"selector": "#old", "label": "Search"}})
+
+        def responses(action, value, selector):
+            if action == "search":
+                return {"success": False, "error": "No search box found on this page."}
+            return {"success": True}
+
+        agent, _ = self._fake(monkeypatch, "https://a.com/", responses)
+        asyncio.run(agent._run_site_command(parse_site_command("search shoes")))
+        assert "search" not in sites.get("a.com")
 
 
 class TestFormatPage:
@@ -309,3 +435,43 @@ class TestLocationPrefix:
         from agent import _with_location
         server.last_page = None
         assert _with_location("hello") == "hello"
+
+
+class TestLearnSite:
+    def test_learns_new_site_once_and_announces_it(self, sites, monkeypatch):
+        import asyncio
+        import agent
+        import server
+        sent, asked = [], []
+
+        async def send_command(msg_type, **kw):
+            asked.append(kw.get("action"))
+            return {"url": "https://www.youtube.com/", "title": "YouTube", "headings": ["Home"],
+                    "keys": {"search": {"selector": 'input[name="search_query"]', "label": "Search"}, "chat": None}}
+
+        async def to_panel(msg):
+            sent.append(msg)
+
+        monkeypatch.setattr(server, "send_command", send_command)
+        monkeypatch.setattr(server, "_send_to_client", to_panel)
+        monkeypatch.setattr(agent, "_profile_site", lambda d, i: {"name": "YouTube", "type": "video",
+                                                                  "summary": "Watch videos", "after_search": "open_result"})
+        page = {"url": "https://www.youtube.com/watch?v=1", "title": "YouTube"}
+        asyncio.run(agent.learn_site(page))
+        asyncio.run(agent.learn_site(page))  # second visit: already learned, no browser call
+
+        assert asked == ["site_info"]
+        entry = sites.get("youtube.com")
+        assert entry["type"] == "video" and entry["search"]["selector"] == 'input[name="search_query"]'
+        assert sent[-1] == {"type": "site", "domain": "youtube.com", "name": "YouTube", "kind": "video",
+                            "search": True, "chat": False, "known": True}
+
+    def test_profile_failure_falls_back(self, monkeypatch):
+        import agent
+
+        class Boom:
+            def converse(self, **kw):
+                raise RuntimeError("no network")
+
+        monkeypatch.setattr(agent.boto3, "client", lambda *a, **k: Boom())
+        assert agent._profile_site("x.com", {"title": "X"}) == {"name": "X", "type": "other"}

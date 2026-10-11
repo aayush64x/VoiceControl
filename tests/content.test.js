@@ -924,3 +924,111 @@ describe("readMainText", () => {
     expect(r).toMatchObject({ success: true, action: "read_text", title: "Forecast", text: "Hot." });
   });
 });
+
+describe("site memory: finding a site's search box and chat box", () => {
+  const { findSearchBox, findChatBox, findKeyElements, stableSelector, resolveKeyElement, typeAndSubmit } = content;
+  const visibleAll = () => document.querySelectorAll("*").forEach(makeVisible);
+
+  test("Google-style: textarea name=q in a search form", () => {
+    document.body.innerHTML = `
+      <form action="/search" role="search"><textarea name="q" aria-label="Search"></textarea></form>
+      <input type="text" aria-label="Your name">`;
+    visibleAll();
+    expect(findSearchBox().getAttribute("name")).toBe("q");
+  });
+
+  test("YouTube-style: input name=search_query", () => {
+    document.body.innerHTML = `<form id="search-form" action="/results"><input id="search" name="search_query" placeholder="Search"></form>`;
+    visibleAll();
+    const box = findSearchBox();
+    expect(box.id).toBe("search");
+    expect(stableSelector(box)).toBe("#search");
+  });
+
+  test("a plain text field is not mistaken for search", () => {
+    document.body.innerHTML = `<input type="text" aria-label="First name"><input type="email" placeholder="Email">`;
+    visibleAll();
+    expect(findSearchBox()).toBe(null);
+  });
+
+  test("ChatGPT-style: contenteditable prompt box with a Send button is the chat box", () => {
+    document.body.innerHTML = `
+      <form><div id="prompt-textarea" contenteditable="true"><p data-placeholder="Ask anything"></p></div>
+      <button aria-label="Send prompt">↑</button></form>`;
+    visibleAll();
+    expect(findChatBox().id).toBe("prompt-textarea");
+    expect(findSearchBox()).toBe(null);
+  });
+
+  test("a page with both: search box and chat box are told apart", () => {
+    document.body.innerHTML = `
+      <input type="search" name="q" placeholder="Search chats">
+      <div><textarea aria-label="Message the assistant"></textarea><button aria-label="Send">Send</button></div>`;
+    visibleAll();
+    const keys = findKeyElements();
+    expect(keys.search.selector).toBe('input[name="q"]');
+    expect(keys.chat.selector).toBe('textarea[aria-label="Message the assistant"]');
+  });
+
+  test("stableSelector skips generated ids and uses a stable attribute", () => {
+    document.body.innerHTML = `<input id="input-83920417" name="query">`;
+    expect(stableSelector(document.querySelector("input"))).toBe('input[name="query"]');
+  });
+
+  test("stableSelector returns null when nothing unique identifies the element", () => {
+    document.body.innerHTML = `<input><input>`;
+    expect(stableSelector(document.querySelector("input"))).toBe(null);
+  });
+
+  test("resolveKeyElement uses the remembered selector, or re-detects if it's gone", () => {
+    document.body.innerHTML = `<input type="search" id="new-search" placeholder="Search">`;
+    visibleAll();
+    expect(resolveKeyElement("search", "#new-search").via).toBe("memory");
+    const redetected = resolveKeyElement("search", "#old-search-from-last-redesign");
+    expect(redetected.via).toBe("detected");
+    expect(redetected.el.id).toBe("new-search");
+  });
+
+  test("typeAndSubmit on a search form submits the form", async () => {
+    document.body.innerHTML = `<form action="/results"><input name="search_query" placeholder="Search"></form>`;
+    visibleAll();
+    const form = document.querySelector("form");
+    form.requestSubmit = jest.fn();
+    const result = await typeAndSubmit(document.querySelector("input"), "cat videos");
+    expect(document.querySelector("input").value).toBe("cat videos");
+    expect(form.requestSubmit).toHaveBeenCalled();
+    expect(result).toMatchObject({ success: true, submitted: true, navigated: true });
+  });
+
+  test("typeAndSubmit in a chat box clicks Send when Enter is ignored", async () => {
+    document.body.innerHTML = `<div><div contenteditable="true" aria-label="Message"></div><button aria-label="Send">Send</button></div>`;
+    visibleAll();
+    const send = document.querySelector("button");
+    const clicked = jest.fn();
+    send.addEventListener("click", clicked);
+    const result = await typeAndSubmit(document.querySelector("[contenteditable]"), "hello");
+    expect(clicked).toHaveBeenCalled();
+    expect(result.sentWith).toBe("send button");
+  });
+
+  test("typeAndSubmit doesn't click Send when the app handled Enter itself", async () => {
+    document.body.innerHTML = `<div><div contenteditable="true" aria-label="Message"></div><button aria-label="Send">Send</button></div>`;
+    visibleAll();
+    const box = document.querySelector("[contenteditable]");
+    box.addEventListener("keydown", (e) => { e.preventDefault(); box.textContent = ""; }); // app sends + clears
+    const clicked = jest.fn();
+    document.querySelector("button").addEventListener("click", clicked);
+    await typeAndSubmit(box, "hello");
+    expect(clicked).not.toHaveBeenCalled();
+  });
+
+  test("site_info reports host, title and key elements", () => {
+    document.title = "YouTube";
+    document.body.innerHTML = `<h1>Home</h1><input type="search" name="search_query" placeholder="Search">`;
+    visibleAll();
+    const info = doAction("site_info");
+    expect(info).toMatchObject({ success: true, action: "site_info", title: "YouTube" });
+    expect(info.keys.search.selector).toBe('input[name="search_query"]');
+    expect(info.keys.chat).toBe(null);
+  });
+});

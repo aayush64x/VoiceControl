@@ -11,8 +11,9 @@ import json
 import os
 import re
 import time
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
+import boto3
 from dotenv import load_dotenv
 from strands import Agent, tool
 from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent
@@ -21,6 +22,7 @@ from strands.models import BedrockModel
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 import server
+import site_memory
 from memory_store import LocalMemoryStore
 from strands.memory import MemoryManager
 
@@ -32,6 +34,9 @@ _memory_manager = MemoryManager(
 )
 
 _server_loop = None
+
+HAIKU = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+SONNET = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
 
 # ---------------------------------------------------------------------------
@@ -49,86 +54,42 @@ _DIRECT_PATTERNS = [
     (r"^list$", lambda m: ("list", None, None)),
 ]
 
-_TAB_SHORTCUTS = {
-    "youtube": "https://youtube.com",
-    "twitter": "https://x.com",
-    "google": "https://google.com",
-    "gmail": "https://gmail.com",
-    "wikipedia": "https://wikipedia.org",
-    "reddit": "https://reddit.com",
-    "instagram": "https://instagram.com",
-    "facebook": "https://facebook.com",
-    "amazon": "https://amazon.com",
-    "linkedin": "https://linkedin.com",
-    "tiktok": "https://tiktok.com",
-    "netflix": "https://netflix.com",
-}
+# Site commands: "search X", "play X on youtube", "ask chatgpt X".
+# These say WHAT to do; site memory knows WHERE (each site's search/chat box,
+# learned on first visit). No per-site rules here.
+_NOT_A_QUERY = re.compile(r"^(it|this|that|them|the (first|second|third|next|last|top)\b|the video|this video)", re.IGNORECASE)
 
 
-# Search result pages we can open directly — one navigation instead of
-# read page → type → click → verify through the model.
-_SEARCH_URLS = {
-    "google": "https://www.google.com/search?q={}",
-    "youtube": "https://www.youtube.com/results?search_query={}",
-    "amazon": "https://www.amazon.com/s?k={}",
-    "wikipedia": "https://en.wikipedia.org/w/index.php?search={}",
-    "reddit": "https://www.reddit.com/search/?q={}",
-    "chatgpt": "https://chatgpt.com/?q={}",
-}
-
-_SITE_NAMES = r"(youtube|google|amazon|wikipedia|reddit|chatgpt|chat gpt)"
-
-_SITE_HOSTS = {
-    "youtube.com": "youtube",
-    "google.com": "google",
-    "amazon.com": "amazon",
-    "wikipedia.org": "wikipedia",
-    "reddit.com": "reddit",
-    "chatgpt.com": "chatgpt",
-}
-
-
-def _search_url(site, query):
-    site = site.lower().replace(" ", "")
-    return _SEARCH_URLS[site].format(quote_plus(query.strip()))
-
-
-def _current_site():
-    """Site key for the page the user is on, if it's one we have a search URL for."""
-    url = (server.last_page or {}).get("url") or ""
-    host = urlparse(url).hostname or ""
-    for domain, site in _SITE_HOSTS.items():
-        if host == domain or host.endswith("." + domain):
-            return site
+def parse_site_command(text):
+    """Return {"action": "search"|"ask", "query", "site" (named site or None), "verb"} or None."""
+    t = text.strip().rstrip(".!")
+    m = re.match(r"^(?:ask|tell)\s+(chat\s?gpt|claude|gemini|perplexity|copilot)\s+(?:to\s+)?(.+)$", t, re.IGNORECASE)
+    if m:
+        return {"action": "ask", "site": m.group(1), "query": m.group(2), "verb": "ask"}
+    m = re.match(r"^(search(?: for)?|look up|find|play|watch)\s+(.+?)\s+on\s+([\w.-]+(?:\s[\w.-]+)?)$", t, re.IGNORECASE)
+    if m and not _NOT_A_QUERY.match(m.group(2)) and m.group(3).lower() not in ("this page", "the page", "here", "this site"):
+        return {"action": "search", "site": m.group(3), "query": m.group(2), "verb": m.group(1).split()[0].lower()}
+    m = re.match(r"^search\s+([\w.-]+)\s+for\s+(.+)$", t, re.IGNORECASE)
+    if m:
+        return {"action": "search", "site": m.group(1), "query": m.group(2), "verb": "search"}
+    # "find" is left out of the bare form: "find the login button" isn't a search
+    m = re.match(r"^(search(?: for)?|look up|play|watch)\s+(.+)$", t, re.IGNORECASE)
+    if m and not _NOT_A_QUERY.match(m.group(2)):
+        return {"action": "search", "site": None, "query": m.group(2), "verb": m.group(1).split()[0].lower()}
+    m = re.match(r"^ask\s+(.+)$", t, re.IGNORECASE)
+    if m:
+        return {"action": "ask", "site": None, "query": m.group(1), "verb": "ask"}
     return None
 
 
-def _try_search(text):
-    """Turn "search X on youtube", "ask chatgpt X", "search for X" into a URL."""
-    m = re.match(r"^(?:ask|tell)\s+(?:chatgpt|chat gpt)\s+(?:to\s+)?(.+)$", text, re.IGNORECASE)
-    if m:
-        return _search_url("chatgpt", m.group(1))
-    m = re.match(rf"^(?:search|look up|find|play)\s+(?:for\s+)?(.+?)\s+on\s+{_SITE_NAMES}$", text, re.IGNORECASE)
-    if m:
-        return _search_url(m.group(2), m.group(1))
-    m = re.match(rf"^(?:search|look up)\s+{_SITE_NAMES}\s+for\s+(.+)$", text, re.IGNORECASE)
-    if m:
-        return _search_url(m.group(1), m.group(2))
-    m = re.match(r"^(?:search|look up)\s+(?:for\s+)?(.+)$", text, re.IGNORECASE)
-    if m:
-        # Only shortcut on sites we know; elsewhere let the agent use the page's own search box
-        site = _current_site()
-        if site:
-            return _search_url(site, m.group(1))
-    return None
+def _site_url(word):
+    """URL for a site the user named: from site memory, else a domain guess."""
+    domain = site_memory.find_by_name(word) or site_memory.guess_domain(word)
+    return "https://" + domain
 
 
 def try_direct(text):
     stripped = text.strip().rstrip(".!")
-
-    url = _try_search(stripped)
-    if url:
-        return ("open", None, url)
 
     # "new tab" commands
     m = re.match(r"^new\s+tab(?:\s+(.+))?$", stripped, re.IGNORECASE)
@@ -136,11 +97,11 @@ def try_direct(text):
         target = (m.group(1) or "").strip().lower()
         if not target:
             return ("new_tab", None, "https://google.com")
-        if target in _TAB_SHORTCUTS:
-            return ("new_tab", None, _TAB_SHORTCUTS[target])
         if re.match(r"^(https?://\S+|[\w.-]+\.\w{2,})$", target):
             url = target if target.startswith("http") else "https://" + target
             return ("new_tab", None, url)
+        if re.match(r"^[a-z0-9-]+$", target):
+            return ("new_tab", None, _site_url(target))
         return None
 
     for pattern, extract in _DIRECT_PATTERNS:
@@ -232,7 +193,9 @@ def act(action: str, element: int = 0, value: str = "", submit: bool = False) ->
     """Perform one action on the page.
 
     Args:
-        action: click, type, select, scroll, back, open, read, press_key
+        action: click, type, select, scroll, back, open, read, press_key,
+            search (finds the site's search box itself — no element needed),
+            ask (types into a chat assistant's message box and sends — no element needed)
         element: Element number from read_page (required for click/type/select)
         value: Text to type, option to select, scroll direction, URL to open, or key name
         submit: With "type" only — also submit after typing (press Enter / click Send).
@@ -245,12 +208,17 @@ def act(action: str, element: int = 0, value: str = "", submit: bool = False) ->
         act("select", 5, "Missouri")                — choose dropdown option
         act("scroll", 0, "down")                    — scroll page down
         act("back")                                 — go back
+        act("search", 0, "cat videos")              — search this site
+        act("ask", 0, "What is the biggest animal?") — send a message in a chat app
         act("open", 0, "https://weather.gov")       — navigate to URL
     """
     elem = element if element > 0 else None
     val = value if value else None
     # Actions that load a new page wait for it (up to ~10s), so allow longer than usual
-    result = _bridge(server.do_action(action, element=elem, value=val, submit=submit), timeout=25)
+    if action in ("search", "ask"):
+        result = _bridge(_site_action(action, val), timeout=25)
+    else:
+        result = _bridge(server.do_action(action, element=elem, value=val, submit=submit), timeout=25)
 
     if not result:
         return "Error: no response from browser."
@@ -471,18 +439,13 @@ task (e.g. use its own search box). NEVER open the page you are already on.
 - After any navigation, call read_page — old element numbers are no longer valid.
 - Use element numbers from the LATEST read_page only.
 - If the command is just a topic or phrase (e.g. "Dark Souls 3"), search for it: on the \
-current site if it has search (YouTube, Amazon, Wikipedia), otherwise on Google. Do not ask what to do.
-- Fastest way to search these sites — open the results URL directly (one step):
-  Google: https://www.google.com/search?q=QUERY
-  YouTube: https://www.youtube.com/results?search_query=QUERY
-  Wikipedia: https://en.wikipedia.org/w/index.php?search=QUERY
-  Amazon: https://www.amazon.com/s?k=QUERY
-  ChatGPT (sends the question): https://chatgpt.com/?q=QUESTION
-- On any other site, type into its search box with submit: act("type", N, "query", True). \
-This types AND submits in one step — never type then click separately.
-- To send a message in a chat box (ChatGPT, etc.), use act("type", N, "message", True). \
-Chat boxes may show as [field] with a label like "Ask anything" or "text box".
-- If act("open", url) fails, go to Google via its search URL.
+current site if it has a search box, otherwise on Google. Do not ask what to do.
+- To search the current site: act("search", 0, "query") — finds the site's search box and \
+submits in one step. If it reports no search box, type into the right field with \
+act("type", N, "query", True) (types AND submits — never type then click separately).
+- To send a message to a chat assistant (ChatGPT, Claude, etc.): act("ask", 0, "message").
+- To search the web when the current site can't: act("open", 0, "https://www.google.com/search?q=QUERY").
+- If act("open", url) fails, search Google for it instead.
 
 Self-correction rules:
 - After a search or sending a message, ONE read_page to confirm, then stop. Do not re-search.
@@ -528,10 +491,7 @@ _agents = {}
 
 def _get_agent(tier):
     if tier not in _agents:
-        if tier == "haiku":
-            model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-        else:
-            model_id = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        model_id = HAIKU if tier == "haiku" else SONNET
         _agents[tier] = Agent(
             model=BedrockModel(model_id=model_id, region_name="us-east-1"),
             system_prompt=_SYSTEM_PROMPT,
@@ -541,6 +501,160 @@ def _get_agent(tier):
         _agents[tier].hooks.add_callback(BeforeToolCallEvent, _on_before_tool)
         _agents[tier].hooks.add_callback(AfterToolCallEvent, _on_after_tool)
     return _agents[tier]
+
+
+# ---------------------------------------------------------------------------
+# Site memory — learn each site once, then go straight to its search/chat box
+# ---------------------------------------------------------------------------
+
+_PROFILE_PROMPT = """Classify this website for a voice browser assistant. Reply with ONLY a JSON object:
+{"name": "short site name", "type": "one of: video, search engine, weather, chat assistant, shopping, news, encyclopedia, social, email, maps, government, form, other", "summary": "one short sentence: what people do here", "after_search": "open_result if people usually open one result after searching (videos, products); read_text if the answer is shown on the results page (weather, facts); otherwise none"}
+
+Site: DOMAIN
+Title: TITLE
+Headings: HEADINGS
+Search box: SEARCH
+Chat box: CHAT"""
+
+# Site types whose search box expects something specific (a location, an
+# address) — "search X" there goes to the agent instead of the instant path
+_NO_INSTANT_SEARCH = {"weather", "maps", "government", "form", "email"}
+
+_learning = set()
+
+
+def _profile_site(domain, info):
+    """One quick Haiku call: what kind of site is this? Falls back to 'other' on any failure."""
+    keys = info.get("keys") or {}
+    prompt = (_PROFILE_PROMPT
+              .replace("DOMAIN", domain)
+              .replace("TITLE", info.get("title") or "")
+              .replace("HEADINGS", " | ".join(info.get("headings") or [])[:400])
+              .replace("SEARCH", (keys.get("search") or {}).get("label", "none"))
+              .replace("CHAT", (keys.get("chat") or {}).get("label", "none")))
+    try:
+        client = boto3.client("bedrock-runtime", region_name="us-east-1")
+        reply = client.converse(
+            modelId=HAIKU,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"maxTokens": 200, "temperature": 0},
+        )
+        text = reply["output"]["message"]["content"][0]["text"]
+        return json.loads(re.search(r"\{.*\}", text, re.DOTALL).group(0))
+    except Exception as exc:
+        print(f"[sites] couldn't classify {domain}: {exc}")
+        return {"name": (info.get("title") or domain)[:40], "type": "other"}
+
+
+async def _announce_site(domain):
+    """Tell the side panel what we know about the current site."""
+    if not domain:
+        return
+    entry = site_memory.get(domain)
+    await server._send_to_client({
+        "type": "site",
+        "domain": domain,
+        "name": entry.get("name") or entry.get("title") or domain,
+        "kind": entry.get("type", ""),
+        "search": bool(entry.get("search")),
+        "chat": bool(entry.get("chat")),
+        "known": bool(entry),
+    })
+
+
+async def learn_site(page):
+    """Runs in the background on every page load; only does work for sites not yet learned."""
+    domain = site_memory.domain_of(page.get("url"))
+    if not domain:
+        return
+    if domain not in _learning and site_memory.needs_learning(domain):
+        _learning.add(domain)
+        if not site_memory.get(domain):
+            await _announce_site(domain)  # shows "Learning <site>…"
+        try:
+            info = await server.send_command("action", action="site_info")
+            if isinstance(info, dict) and not info.get("error") and site_memory.domain_of(info.get("url")) == domain:
+                site_memory.remember_elements(domain, info.get("keys") or {}, info.get("title"))
+                if "type" not in site_memory.get(domain):
+                    loop = asyncio.get_running_loop()
+                    profile = await loop.run_in_executor(None, _profile_site, domain, info)
+                    site_memory.remember_profile(domain, profile)
+                entry = site_memory.get(domain)
+                print(f"[sites] learned {domain}: {entry.get('name')} — {entry.get('type')} "
+                      f"(search box: {'yes' if entry.get('search') else 'no'}, "
+                      f"chat box: {'yes' if entry.get('chat') else 'no'})")
+        except Exception as exc:
+            print(f"[sites] couldn't learn {domain}: {exc}")
+        finally:
+            _learning.discard(domain)
+    await _announce_site(domain)
+
+
+async def _site_action(action, query):
+    """Search or ask on the current page, using the remembered box if there is one.
+
+    Whatever box actually worked is remembered for next time; a remembered box
+    that's gone (site redesign) is forgotten so it gets relearned.
+    """
+    kind = "chat" if action == "ask" else "search"
+    domain = site_memory.domain_of((server.last_page or {}).get("url"))
+    remembered = (site_memory.get(domain).get(kind) or {}).get("selector")
+    result = await server.do_action(action, value=query, selector=remembered)
+    if isinstance(result, dict) and result.get("success") and result.get("selector"):
+        site_memory.remember_elements(domain, {kind: {"selector": result["selector"], "label": result.get("label", "")}})
+    elif remembered and isinstance(result, dict) and str(result.get("error", "")).startswith("No "):
+        site_memory.forget_element(domain, kind)
+    return result
+
+
+async def _run_site_command(cmd):
+    """Instant path for "search/play/ask X": no model call when the site's box is known.
+
+    Returns a reply string, ("agent", follow-up instruction) to hand off to the
+    agent, or None to let the agent handle the whole command.
+    """
+    current = site_memory.domain_of((server.last_page or {}).get("url"))
+    if cmd["site"]:
+        target = site_memory.find_by_name(cmd["site"]) or site_memory.guess_domain(cmd["site"])
+        if target != current:
+            _emit({"type": "step", "tool": "act", "input": f"open {target}", "status": "running", "step_id": "site-open"})
+            opened = await server.do_action("open", value="https://" + target)
+            ok = isinstance(opened, dict) and opened.get("success")
+            _emit({"type": "step", "tool": "act", "step_id": "site-open", "status": "ok" if ok else "error",
+                   "detail": f"Opened {target}" if ok else str((opened or {}).get("error", "failed"))})
+            if not ok:
+                return f"Couldn't open {target}."
+            current = target
+            # The new site may not be learned yet — the box is detected live either way
+
+    entry = site_memory.get(current)
+    name = entry.get("name") or current or "this page"
+    if cmd["action"] == "search" and not cmd["site"] and entry.get("type") in _NO_INSTANT_SEARCH:
+        return None  # e.g. a weather site wants a location — let the agent work it out
+
+    _emit({"type": "step", "tool": "act", "step_id": "site-action", "status": "running",
+           "input": f'{cmd["action"]} "{cmd["query"]}"'})
+    result = await _site_action(cmd["action"], cmd["query"])
+    ok = isinstance(result, dict) and result.get("success")
+    _emit({"type": "step", "tool": "act", "step_id": "site-action", "status": "ok" if ok else "error",
+           "detail": (f"Used {name}'s {'chat' if cmd['action'] == 'ask' else 'search'} box"
+                      f"{' (remembered)' if result.get('found') == 'memory' else ''}") if ok
+           else str((result or {}).get("error", "failed"))})
+
+    if ok:
+        if cmd["verb"] in ("play", "watch"):
+            return ("agent", f'Search results for "{cmd["query"]}" are showing. Click the best matching video so it plays.')
+        if cmd["action"] == "ask":
+            return f"Asked {name}: {cmd['query']}"
+        return f"Searched {name} for {cmd['query']}."
+
+    if cmd["action"] == "search" and not cmd["site"]:
+        # Nothing to search on this page — search the web instead
+        url = "https://www.google.com/search?q=" + quote_plus(cmd["query"])
+        opened = await server.do_action("open", value=url)
+        if isinstance(opened, dict) and opened.get("success"):
+            return f"Searched Google for {cmd['query']}."
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +726,11 @@ def _with_location(text):
     if not url:
         return text
     title = page.get("title") or "untitled page"
-    return f"[You are on: {title} — {url}]\n{text}"
+    lines = [f"[You are on: {title} — {url}]"]
+    known = site_memory.describe(site_memory.domain_of(url))
+    if known:
+        lines.append(f"[Site memory: {known}]")
+    return "\n".join(lines) + "\n" + text
 
 
 def cancel_current():
@@ -644,6 +762,27 @@ async def process_input(text):
         _emit({"type": "step", "tool": "route", "input": "Direct command — no AI", "status": "ok"})
         return await _run_direct(text)
 
+    # Ask the browser which page is open right now, so both the instant path and
+    # the agent work on the page the user is looking at (list_elements also
+    # records its title/URL). A failure here is fine — they just know less.
+    try:
+        await server.list_elements()
+    except Exception as exc:
+        print(f"[agent] couldn't check current page: {exc}")
+
+    # "search / play / ask X": site memory knows where the box is — no model call
+    cmd = parse_site_command(text)
+    if cmd:
+        print(f"[sites] Instant path: {cmd['action']} {cmd['query']!r}" + (f" on {cmd['site']}" if cmd["site"] else ""))
+        _emit({"type": "step", "tool": "route", "input": "Site memory · instant (no AI)", "status": "ok"})
+        outcome = await _run_site_command(cmd)
+        if isinstance(outcome, str):
+            return outcome
+        if isinstance(outcome, tuple):
+            text, tier = outcome[1], "haiku"  # short follow-up, e.g. open the video
+        else:
+            print("[sites] Instant path can't do this one — handing to the agent")
+
     label = "Haiku" if tier == "haiku" else "Sonnet"
     print(f"[tier {'2' if tier == 'haiku' else '3'}] Using {label}")
     _emit({
@@ -652,13 +791,6 @@ async def process_input(text):
         "input": f"Strands agent · Claude {label} ({'quick task' if tier == 'haiku' else 'multi-step task'})",
         "status": "ok",
     })
-    # Ask the browser which page is open right now, so the agent works on the
-    # page the user is looking at (list_elements also records its title/URL).
-    # A failure here is fine — the agent just won't get the "You are on" line.
-    try:
-        await server.list_elements()
-    except Exception as exc:
-        print(f"[agent] couldn't check current page: {exc}")
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _run_agent, text, tier)
 
@@ -705,6 +837,7 @@ async def main():
     _server_loop = asyncio.get_running_loop()
     server.on_user_input = process_input
     server.on_cancel = cancel_current
+    server.on_page_ready = learn_site
 
     import websockets as _ws
 

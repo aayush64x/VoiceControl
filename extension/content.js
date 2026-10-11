@@ -457,6 +457,169 @@ function readMainText(maxChars = 4000) {
   return { title: document.title, text, truncated };
 }
 
+// --- Key elements: a site's search box and chat box ---
+// Found by structure and labels, not per-site rules. The backend remembers
+// what's found per site (site memory) so later commands skip straight to it.
+const SEARCH_NAMES = ["q", "query", "search", "search_query", "s", "k", "keyword", "keywords", "term"];
+const SEARCH_HINT = /search|look ?up/i;
+const CHAT_HINT = /\b(ask|message|prompt|chat|reply|talk)\b|send a/i;
+
+function cssEscape(text) {
+  return String(text).replace(/([^\w-])/g, "\\$1");
+}
+
+// A selector that finds this element again on a later visit (not its number)
+function stableSelector(el) {
+  const tag = el.tagName.toLowerCase();
+  const unique = (sel) => {
+    try {
+      return document.querySelectorAll(sel).length === 1 ? sel : null;
+    } catch (e) {
+      return null;
+    }
+  };
+  // Skip generated-looking ids (long digit runs, colons) — they change per visit
+  if (el.id && !/\d{3,}|:/.test(el.id)) {
+    const sel = unique(`#${cssEscape(el.id)}`);
+    if (sel) return sel;
+  }
+  for (const attr of ["data-testid", "name", "aria-label", "placeholder", "title"]) {
+    const value = el.getAttribute(attr);
+    if (value && value.length < 80) {
+      const sel = unique(`${tag}[${attr}="${value.replace(/"/g, '\\"')}"]`);
+      if (sel) return sel;
+    }
+  }
+  return null;
+}
+
+function isTextEntry(el) {
+  if (el.tagName === "TEXTAREA") return true;
+  if (el.tagName === "INPUT") return ["search", "text", ""].includes((el.getAttribute("type") || "").toLowerCase());
+  return isRichTextBox(el);
+}
+
+function hintText(el) {
+  return ["aria-label", "placeholder", "title", "name", "id", "data-testid", "aria-placeholder", "data-placeholder"]
+    .map((a) => el.getAttribute(a) || "").join(" ");
+}
+
+function textEntries() {
+  return Array.from(document.querySelectorAll("input, textarea, [contenteditable]:not([contenteditable='false']), [role='textbox'], [role='searchbox']"))
+    .filter((el) => isTextEntry(el) || el.getAttribute("role") === "searchbox")
+    .filter((el) => !el.disabled && isVisible(el) && !(el.parentElement && el.parentElement.closest("[contenteditable]:not([contenteditable='false'])")));
+}
+
+function scoreSearch(el) {
+  let score = 0;
+  if ((el.getAttribute("type") || "").toLowerCase() === "search" || el.getAttribute("role") === "searchbox") score += 5;
+  if (el.closest("[role='search'], form[role='search']")) score += 4;
+  const form = el.closest("form");
+  if (form && /search|results|find/i.test(form.getAttribute("action") || "")) score += 3;
+  if (SEARCH_NAMES.includes((el.getAttribute("name") || "").toLowerCase())) score += 3;
+  if (SEARCH_HINT.test(hintText(el))) score += 3;
+  return score;
+}
+
+function scoreChat(el) {
+  let score = 0;
+  if (isRichTextBox(el)) score += 3;
+  if (el.tagName === "TEXTAREA") score += 1;
+  if (CHAT_HINT.test(hintText(el))) score += 3;
+  if (/prompt|composer|chat/i.test((el.id || "") + " " + (el.getAttribute("data-testid") || ""))) score += 2;
+  if (findSendButton(el)) score += 1;
+  return score;
+}
+
+function best(list, scorer, minScore) {
+  let top = null;
+  let topScore = minScore - 1;
+  for (const el of list) {
+    const score = scorer(el);
+    if (score > topScore) {
+      top = el;
+      topScore = score;
+    }
+  }
+  return top;
+}
+
+function findSearchBox() {
+  return best(textEntries(), scoreSearch, 3);
+}
+
+function findChatBox() {
+  const search = findSearchBox();
+  return best(textEntries().filter((el) => el !== search), scoreChat, 4);
+}
+
+function describeElement(el) {
+  return el ? { selector: stableSelector(el), label: getLabel(el) } : null;
+}
+
+function findKeyElements() {
+  return { search: describeElement(findSearchBox()), chat: describeElement(findChatBox()) };
+}
+
+// Use the remembered selector if it still matches something visible; otherwise detect again
+function resolveKeyElement(kind, selector) {
+  if (selector) {
+    try {
+      const el = document.querySelector(selector);
+      if (el && isVisible(el) && !el.disabled) return { el, via: "memory" };
+    } catch (e) {
+      // Bad selector — fall through to detection
+    }
+  }
+  const el = kind === "chat" ? findChatBox() : findSearchBox();
+  return el ? { el, via: "detected" } : null;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Type into a search or chat box and submit it, however the site expects it:
+// the page's own Enter handler, the form, or a Send button.
+async function typeAndSubmit(el, value) {
+  const urlBefore = location.href;
+  scrollToElement(el);
+  let verified;
+  if (isRichTextBox(el)) {
+    verified = typeIntoRichText(el, value);
+  } else {
+    el.focus();
+    setNativeValue(el, value);
+    el.dispatchEvent(new InputEvent("input", { data: value, bubbles: true, inputType: "insertText" }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    verified = el.value === value;
+  }
+  const result = { success: true, verified, submitted: true };
+
+  const handled = pressEnter(el);
+  const form = el.closest("form");
+  if (!handled && form && !isRichTextBox(el)) {
+    if (form.requestSubmit) form.requestSubmit();
+    else form.submit();
+    result.navigated = true;
+    return result;
+  }
+
+  // Enter may have been ignored (common in chat apps): use the Send button
+  await sleep(400);
+  const current = isRichTextBox(el) ? textOf(el) : el.value;
+  if (el.isConnected && current && current.includes(value)) {
+    const btn = findSendButton(el);
+    if (btn) {
+      btn.click();
+      result.sentWith = "send button";
+    }
+  }
+  const { changed } = await waitForSettle();
+  result.changed = changed;
+  // Single-page apps (YouTube) show results by changing the address in place
+  if (location.href !== urlBefore) result.navigated = true;
+  return result;
+}
+
 // --- Fix 2: Every action reports back clearly ---
 function doAction(action, element, value, submit = false) {
   if (action === "scroll") {
@@ -476,6 +639,18 @@ function doAction(action, element, value, submit = false) {
     if (!value.startsWith("http")) value = "https://" + value;
     window.location.href = value;
     return { success: true, action: "open", url: value };
+  }
+
+  if (action === "site_info") {
+    return {
+      success: true,
+      action: "site_info",
+      url: location.href,
+      host: location.hostname,
+      title: document.title,
+      headings: getPageContext().headings,
+      keys: findKeyElements(),
+    };
   }
 
   if (action === "read_text") {
@@ -568,7 +743,7 @@ function doAction(action, element, value, submit = false) {
     return { success: true, action: "press_key", key: value };
   }
 
-  return { success: false, error: `Unknown action: "${action}". Valid: click, type, select, scroll, back, open, read, read_text, press_key.` };
+  return { success: false, error: `Unknown action: "${action}". Valid: click, type, select, scroll, back, open, read, read_text, search, ask, press_key.` };
 }
 
 // --- Waiting for the page to settle ---
@@ -669,6 +844,24 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage 
       sendResponse({ elements, count: elements.length, title: document.title, url: location.href, context: getPageContext() });
       return true;
     }
+    if (message.type === "action" && (message.action === "search" || message.action === "ask")) {
+      const kind = message.action === "ask" ? "chat" : "search";
+      const target = resolveKeyElement(kind, message.selector);
+      if (!target) {
+        sendResponse({ success: false, error: `No ${kind === "chat" ? "chat" : "search"} box found on this page.` });
+        return true;
+      }
+      if (!message.value) {
+        sendResponse({ success: false, error: `Nothing to ${message.action} for.` });
+        return true;
+      }
+      const label = getLabel(target.el);
+      const selector = stableSelector(target.el);
+      typeAndSubmit(target.el, message.value).then((result) => {
+        sendResponse({ ...result, action: message.action, found: target.via, selector, label });
+      });
+      return true;
+    }
     if (message.type === "action") {
       const result = doAction(message.action, message.element, message.value, message.submit);
       const el = elementMap[message.element];
@@ -695,6 +888,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage 
       const skipRescan = !result.success
         || message.action === "read"
         || message.action === "read_text"
+        || message.action === "site_info"
         || message.action === "scroll"
         || message.action === "back"
         || message.action === "open"
@@ -742,5 +936,5 @@ function resetForTest() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { readMainText, waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
+  module.exports = { findSearchBox, findChatBox, findKeyElements, stableSelector, resolveKeyElement, typeAndSubmit, readMainText, waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
 }
