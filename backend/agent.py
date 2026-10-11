@@ -644,7 +644,7 @@ async def main():
 
     print(f"[bridge] Starting on ws://localhost:{server.PORT}")
     try:
-        async with _ws.serve(server.handler, "localhost", server.PORT):
+        async with _ws.serve(server.handler, "localhost", server.PORT, origins=server.ALLOWED_ORIGINS):
             await chat_loop()
     except OSError as e:
         if "address already in use" in str(e).lower():

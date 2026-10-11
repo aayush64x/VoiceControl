@@ -413,3 +413,21 @@ async def test_stop_when_idle_replies():
             await ws.send(json.dumps({"type": "user_said", "text": "cancel"}))
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
             assert msg == {"type": "agent_response", "text": "Stopped."}
+
+
+@pytest.mark.asyncio
+async def test_websites_cannot_connect():
+    """A web page opening ws://localhost must be rejected; the extension and scripts are allowed."""
+    async with websockets.serve(server.handler, "localhost", 0, origins=server.ALLOWED_ORIGINS) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        url = f"ws://localhost:{port}"
+
+        with pytest.raises(websockets.InvalidStatus):
+            await websockets.connect(url, origin="https://evil.example")
+        with pytest.raises(websockets.InvalidStatus):
+            await websockets.connect(url, origin="chrome-extension://not-a-real-id")
+
+        async with websockets.connect(url, origin="chrome-extension://" + "a" * 32):
+            pass
+        async with websockets.connect(url):  # no Origin header (scripts/tests)
+            pass

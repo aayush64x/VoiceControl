@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import time
 
 import websockets
@@ -9,6 +10,12 @@ import websockets
 from transcribe import VoiceTranscriber
 
 PORT = 8765
+
+# Only our Chrome extension may connect. Browsers always send an Origin header,
+# so this blocks any website from opening ws://localhost:8765 and driving the
+# agent. None allows non-browser clients (tests, scripts) that send no Origin.
+# Unpacked extension IDs differ per machine, so any extension ID is accepted.
+ALLOWED_ORIGINS = [re.compile(r"chrome-extension://[a-p]{32}"), None]
 client = None
 pending = {}
 request_id = 0
@@ -319,7 +326,7 @@ async def interactive_mode():
 async def main():
     print(f"[bridge] Starting on ws://localhost:{PORT}")
     try:
-        async with websockets.serve(handler, "localhost", PORT):
+        async with websockets.serve(handler, "localhost", PORT, origins=ALLOWED_ORIGINS):
             await interactive_mode()
     except OSError as e:
         if "address already in use" in str(e).lower():
