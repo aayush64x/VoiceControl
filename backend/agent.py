@@ -574,7 +574,7 @@ def _run_agent(text, tier):
     finally:
         _running_agent = None
     if getattr(response, "stop_reason", None) == "cancelled":
-        return "Stopped — running your new command."
+        return "Stopped."
     return str(response)
 
 

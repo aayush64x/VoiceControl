@@ -366,3 +366,50 @@ async def test_user_said_empty_ignored():
             await ws.send(json.dumps({"type": "user_said", "text": "   "}))
             await asyncio.sleep(0.2)
             assert call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_stop_drops_queue_and_cancels_running_task():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        ran = []
+        cancelled = asyncio.Event()
+
+        async def slow_agent(text):
+            ran.append(text)
+            try:
+                await asyncio.wait_for(cancelled.wait(), timeout=2)
+                return "Stopped."
+            except asyncio.TimeoutError:
+                return f"Done: {text}"
+
+        server.on_user_input = slow_agent
+        server.on_cancel = cancelled.set
+
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": "first"}))
+            await ws.send(json.dumps({"type": "user_said", "text": "second"}))
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": "Stop."}))
+
+            responses = []
+            while not responses:
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+                if msg["type"] == "agent_response":
+                    responses.append(msg["text"])
+            await asyncio.sleep(0.1)
+
+            assert responses == ["Stopped."]
+            assert ran == ["first"]  # "second" was dropped from the queue
+
+
+@pytest.mark.asyncio
+async def test_stop_when_idle_replies():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": "cancel"}))
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+            assert msg == {"type": "agent_response", "text": "Stopped."}

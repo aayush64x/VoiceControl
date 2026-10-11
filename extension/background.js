@@ -45,3 +45,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // page_ready from content scripts reaches the side panel directly, so it is
   // not re-forwarded here (that made every page report twice).
 });
+
+// Keyboard shortcut (Alt+Shift+V): start/stop voice without touching the mouse.
+// Opens the side panel first if needed — sidePanel.open must run synchronously
+// inside the shortcut's user gesture, so it's called before anything async.
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command !== "toggle-mic") return;
+  if (tab && tab.windowId !== undefined) {
+    chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+  }
+  chrome.runtime.sendMessage({ type: "toggle_mic" }).catch(() => {
+    // Panel wasn't open yet — it starts the mic itself once it has loaded
+    chrome.storage.session.set({ startMicOnOpen: Date.now() });
+  });
+});

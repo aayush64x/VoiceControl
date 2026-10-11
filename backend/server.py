@@ -83,6 +83,27 @@ def _cancel_open_question():
     return True
 
 
+_STOP_WORDS = {"stop", "cancel", "stop it", "never mind", "nevermind"}
+
+
+async def stop_everything():
+    """'stop': drop queued commands, dismiss any question, and halt the running task."""
+    dropped = 0
+    if _command_queue is not None:
+        while not _command_queue.empty():
+            _command_queue.get_nowait()
+            _command_queue.task_done()
+            dropped += 1
+    if _cancel_open_question():
+        await _send_to_client({"type": "question_cancelled"})
+    if _busy and on_cancel:
+        on_cancel()
+        # The cancelled task replies "Stopped." itself when it winds down
+    else:
+        await _send_to_client({"type": "agent_response", "text": "Stopped."})
+    print(f"[command] Stop — halted current task, dropped {dropped} queued")
+
+
 async def enqueue_command(text):
     global _command_queue, _worker_task
     if _command_queue is None:
@@ -152,7 +173,9 @@ async def handler(websocket):
 
             if msg_type == "user_said":
                 text = msg.get("text", "").strip()
-                if text:
+                if text.lower().rstrip(".!") in _STOP_WORDS:
+                    await stop_everything()
+                elif text:
                     await enqueue_command(text)
                 continue
 

@@ -3,7 +3,13 @@
   "name": "Voice Browser Agent",
   "version": "0.1",
   "description": "Voice-controlled browser agent for accessibility",
-  "permissions": ["activeTab", "sidePanel", "scripting", "tabs"],
+  "permissions": [
+    "activeTab",
+    "sidePanel",
+    "scripting",
+    "tabs",
+    "storage"
+  ],
   "side_panel": {
     "default_path": "sidepanel.html"
   },
@@ -15,9 +21,22 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "commands": {
+    "toggle-mic": {
+      "suggested_key": {
+        "default": "Alt+Shift+V",
+        "mac": "Alt+Shift+V"
+      },
+      "description": "Start or stop a voice command"
+    }
+  }
 }

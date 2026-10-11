@@ -23,6 +23,7 @@ function connectWs() {
   ws.onopen = () => {
     wsConnected = true;
     updateConnectionStatus();
+    startMicIfShortcutOpenedPanel();
   };
 
   ws.onclose = () => {
@@ -62,12 +63,19 @@ function connectWs() {
         if (recording) stopRecording(false);
         transcriptEl.textContent = "";
         micStatus.textContent = msg.error + " — click mic to try again";
+        speak("Sorry, I didn't catch that.");
         return;
       }
       if (msg.is_final) {
         finalText = msg.text;
         transcriptEl.textContent = finalText;
-        if (pendingSend && finalText.trim()) {
+        if (pendingSend && finalText.trim() && answerQuestion && !isStopCommand(finalText)) {
+          // A question is on screen: what the user says is the answer, not a new command
+          pendingSend = false;
+          micStatus.textContent = "Click mic to speak";
+          answerQuestion(normalizeAnswer(finalText.trim(), currentQuestionYesNo));
+          finalText = "";
+        } else if (pendingSend && finalText.trim()) {
           pendingSend = false;
           ws.send(JSON.stringify({ type: "user_said", text: finalText.trim() }));
           cmdResult.textContent = "Processing: " + finalText.trim();
@@ -86,6 +94,7 @@ function connectWs() {
       cmdResult.textContent = msg.text ? "Working on: " + msg.text : "Agent is thinking...";
       cmdResult.className = "";
       clearSteps();
+      stopSpeaking();
       return;
     }
 
@@ -108,6 +117,7 @@ function connectWs() {
     if (msg.type === "agent_response") {
       cmdResult.textContent = msg.text;
       cmdResult.className = "";
+      speak(speakableReply(msg.text));
       return;
     }
 
@@ -121,6 +131,7 @@ function connectWs() {
     }
 
     if (msg.type === "ask_user") {
+      speak(msg.question + (msg.yes_no ? " Say yes or no." : ""));
       showQuestion(msg.question, msg.yes_no, (answer) => {
         sendReply({ answer });
       });
@@ -183,6 +194,7 @@ function startRecording() {
     return;
   }
 
+  stopSpeaking(); // the backend mic would otherwise record our own voice
   recording = true;
   finalText = "";
   pendingSend = false;
@@ -213,13 +225,79 @@ function stopRecording(sendToAgent = true) {
   }
 }
 
-micBtn.addEventListener("click", () => {
+function toggleMic() {
   if (recording) {
     stopRecording();
   } else {
     startRecording();
   }
+}
+
+micBtn.addEventListener("click", toggleMic);
+
+// The Alt+Shift+V shortcut opened this panel: start listening right away
+function startMicIfShortcutOpenedPanel() {
+  if (!chrome.storage || !chrome.storage.session) return;
+  chrome.storage.session.get("startMicOnOpen", ({ startMicOnOpen }) => {
+    if (!startMicOnOpen) return;
+    chrome.storage.session.remove("startMicOnOpen");
+    if (Date.now() - startMicOnOpen < 10000 && !recording) startRecording();
+  });
+}
+
+// --- Spoken replies ---
+const speakToggle = document.getElementById("speak-replies");
+try {
+  speakToggle.checked = localStorage.getItem("speakReplies") !== "off";
+} catch {}
+speakToggle.addEventListener("change", () => {
+  try { localStorage.setItem("speakReplies", speakToggle.checked ? "on" : "off"); } catch {}
+  if (!speakToggle.checked) stopSpeaking();
 });
+
+function speak(text) {
+  if (!speakToggle.checked || !text || !window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1.05;
+  speechSynthesis.speak(utterance);
+}
+
+function stopSpeaking() {
+  if (window.speechSynthesis) speechSynthesis.cancel();
+}
+
+// Turn an agent reply into something worth hearing: no JSON, no full URLs, not too long
+function speakableReply(text) {
+  if (!text) return "";
+  if (text.startsWith("OK:")) return "Done.";
+  if (text.startsWith("Found ") && text.includes(" elements:")) return text.split("\n")[0];
+  let out = text
+    .replace(/https?:\/\/(?:www\.)?([^\/\s?]+)\S*/g, "$1")
+    .replace(/[*_#`>]/g, "")
+    .replace(/\(element \d+\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (out.length > 350) {
+    const cut = out.slice(0, 350);
+    const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+    out = end > 100 ? cut.slice(0, end + 1) : cut + "…";
+  }
+  return out;
+}
+
+function isStopCommand(text) {
+  return /^(stop|cancel|stop it|never mind|nevermind)[.!]?$/i.test(text.trim());
+}
+
+// Spoken yes/no answers in everyday words map onto the Yes/No buttons
+function normalizeAnswer(text, yesNo) {
+  if (!yesNo) return text;
+  const t = text.toLowerCase().replace(/[.!?]/g, "").trim();
+  if (/^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|correct|right)\b/.test(t)) return "Yes";
+  if (/^(no|nope|nah|don't|do not|not now)\b/.test(t)) return "No";
+  return text;
+}
 
 // --- List elements button ---
 listBtn.addEventListener("click", () => {
@@ -376,7 +454,10 @@ function renderElements(response) {
 
 // --- Ask-user UI ---
 // Set while a question is on screen, so a new command can dismiss it
+// and a spoken reply can answer it
 let closeQuestion = null;
+let answerQuestion = null;
+let currentQuestionYesNo = false;
 
 function showQuestion(question, yesNo, callback) {
   const container = document.getElementById("ask-container");
@@ -412,8 +493,11 @@ function showQuestion(question, yesNo, callback) {
     sendBtn.onclick = null;
     inputEl.onkeydown = null;
     closeQuestion = null;
+    answerQuestion = null;
   }
   closeQuestion = cleanup;
+  currentQuestionYesNo = !!yesNo;
+  answerQuestion = (answer) => { cleanup(); callback(answer); };
 
   yesBtn.onclick = () => { cleanup(); callback("Yes"); };
   noBtn.onclick = () => { cleanup(); callback("No"); };
@@ -430,6 +514,10 @@ function showQuestion(question, yesNo, callback) {
 
 // --- Listen for messages from background/content ---
 chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === "toggle_mic") {
+    toggleMic();
+    return;
+  }
   if (message.type === "page_ready") {
     renderElements(message);
     if (ws && wsConnected) {

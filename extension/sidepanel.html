@@ -99,6 +99,9 @@
       overflow-y: auto;
     }
     #cmd-result.error { color: #f88; }
+    #mic-hint { font-size: 11px; color: #888; margin-top: 4px; }
+    #mic-hint kbd { background: #2a2a4a; border-radius: 3px; padding: 0 4px; font-family: inherit; color: #ccc; }
+    #speak-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: #aaa; margin-top: 6px; cursor: pointer; }
     #steps-section { margin-top: 12px; display: none; }
     #steps-section.has-steps { display: block; }
     #steps-title { font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 6px; }
@@ -266,6 +269,8 @@
       </svg>
     </button>
     <div id="mic-status">Click mic to speak</div>
+    <div id="mic-hint">Shortcut: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> · say "stop" to halt</div>
+    <label id="speak-toggle"><input type="checkbox" id="speak-replies" checked> Speak replies</label>
     <div id="transcript"></div>
   </div>
   <hr class="divider">
