@@ -114,25 +114,91 @@ def _cancel_open_question():
     return True
 
 
-_STOP_WORDS = {"stop", "cancel", "stop it", "never mind", "nevermind"}
+# Control words: instant, no AI, work at any moment (even mid-task or while a
+# question is open). Only these exact short phrases count, so "cancel my
+# subscription" is still a normal request.
+STOP_ONE = {"stop", "stop it", "stop that", "halt", "never mind", "nevermind"}
+STOP_ALL = {"stop everything", "stop all", "stop all of it", "start over", "reset"}
+CANCEL = {"cancel", "cancel that", "cancel it"}
 
 
-async def stop_everything():
-    """'stop': drop queued commands, dismiss any question, and halt the running task."""
+def control_phrase(text):
+    """'Stop!' / 'stop stop' / 'Stop everything.' -> 'stop' / 'stop' / 'stop everything'."""
+    words = re.sub(r"[^a-z ]", " ", (text or "").lower()).split()
+    deduped = [w for i, w in enumerate(words) if i == 0 or w != words[i - 1]]
+    return " ".join(deduped)
+
+
+def _drop_queue():
     dropped = 0
     if _command_queue is not None:
         while not _command_queue.empty():
             _command_queue.get_nowait()
             _command_queue.task_done()
             dropped += 1
+    return dropped
+
+
+async def stop_current():
+    """'stop': halt the task that's running now. Commands queued after it still run."""
     if _cancel_open_question():
         await _send_to_client({"type": "question_cancelled"})
     if _busy and on_cancel:
-        on_cancel()
-        # The cancelled task replies "Stopped." itself when it winds down
+        on_cancel()  # the cancelled task replies "Stopped: ..." itself when it winds down
     else:
-        await _send_to_client({"type": "agent_response", "text": "Stopped."})
-    print(f"[command] Stop — halted current task, dropped {dropped} queued")
+        await _send_to_client({"type": "agent_response", "text": "Nothing to stop."})
+    print("[command] Stop — halted the current task")
+
+
+async def stop_everything(start_over=False):
+    """'stop everything' / 'start over': halt the task, clear the queue, close any
+    question, and tell the panel to stop speaking and listening."""
+    dropped = _drop_queue()
+    if _cancel_open_question():
+        await _send_to_client({"type": "question_cancelled"})
+    await _send_to_client({"type": "reset", "start_over": start_over})
+    if _busy and on_cancel:
+        on_cancel()
+    elif start_over:
+        await _send_to_client({"type": "agent_response", "text": "Starting over. What would you like to do?"})
+    else:
+        await _send_to_client({"type": "agent_response", "text": "Stopped everything."})
+    print(f"[command] Stop everything — halted the current task, dropped {dropped} queued")
+
+
+def _answer_open_question(answer):
+    """Answer the question on screen ourselves (e.g. 'cancel' = 'no')."""
+    global _question_rid
+    rid = _question_rid
+    future = pending.get(rid) if rid is not None else None
+    if not future or future.done():
+        return False
+    _question_rid = None
+    future.set_result({"answer": answer})
+    return True
+
+
+async def cancel():
+    """'cancel': at a question (e.g. 'Should I submit?') it means no; otherwise it's 'stop'."""
+    if _answer_open_question("No"):
+        await _send_to_client({"type": "question_cancelled"})
+        print("[command] Cancel — answered the open question 'No'")
+        return
+    await stop_current()
+
+
+async def handle_control(text):
+    """Run a control word if this is one. Returns True if it was."""
+    phrase = control_phrase(text)
+    if phrase in STOP_ONE:
+        await stop_current()
+    elif phrase in STOP_ALL:
+        await stop_everything(start_over=phrase in ("start over", "reset"))
+    elif phrase in CANCEL:
+        await cancel()
+    else:
+        return False
+    return True
 
 
 async def enqueue_command(text):
@@ -204,9 +270,7 @@ async def handler(websocket):
 
             if msg_type == "user_said":
                 text = msg.get("text", "").strip()
-                if text.lower().rstrip(".!") in _STOP_WORDS:
-                    await stop_everything()
-                elif text:
+                if text and not await handle_control(text):
                     await enqueue_command(text)
                 continue
 

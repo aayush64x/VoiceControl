@@ -371,8 +371,8 @@ async def test_user_said_empty_ignored():
             assert call_count == 0
 
 
-@pytest.mark.asyncio
-async def test_stop_drops_queue_and_cancels_running_task():
+async def _run_with_queue(control_text):
+    """'first' runs slowly, 'second' is queued, then a control word arrives."""
     async with websockets.serve(server.handler, "localhost", 0) as ws_server:
         port = ws_server.sockets[0].getsockname()[1]
         ran = []
@@ -380,31 +380,58 @@ async def test_stop_drops_queue_and_cancels_running_task():
 
         async def slow_agent(text):
             ran.append(text)
-            try:
-                await asyncio.wait_for(cancelled.wait(), timeout=2)
-                return "Stopped."
-            except asyncio.TimeoutError:
-                return f"Done: {text}"
+            if text == "first":
+                try:
+                    await asyncio.wait_for(cancelled.wait(), timeout=2)
+                    cancelled.clear()
+                    return "Stopped: first"
+                except asyncio.TimeoutError:
+                    return "Done: first"
+            return f"Done: {text}"
 
         server.on_user_input = slow_agent
         server.on_cancel = cancelled.set
-
+        messages = []
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             await asyncio.sleep(0.05)
             await ws.send(json.dumps({"type": "user_said", "text": "first"}))
             await ws.send(json.dumps({"type": "user_said", "text": "second"}))
             await asyncio.sleep(0.05)
-            await ws.send(json.dumps({"type": "user_said", "text": "Stop."}))
+            await ws.send(json.dumps({"type": "user_said", "text": control_text}))
+            try:
+                while True:
+                    messages.append(json.loads(await asyncio.wait_for(ws.recv(), timeout=0.6)))
+            except asyncio.TimeoutError:
+                pass
+        return ran, messages
 
-            responses = []
-            while not responses:
-                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
-                if msg["type"] == "agent_response":
-                    responses.append(msg["text"])
-            await asyncio.sleep(0.1)
 
-            assert responses == ["Stopped."]
-            assert ran == ["first"]  # "second" was dropped from the queue
+@pytest.mark.asyncio
+async def test_stop_interrupts_current_task_but_queue_continues():
+    ran, messages = await _run_with_queue("Stop!")
+    assert ran == ["first", "second"]
+    responses = [m["text"] for m in messages if m["type"] == "agent_response"]
+    assert responses == ["Stopped: first", "Done: second"]
+
+
+@pytest.mark.asyncio
+async def test_stop_everything_also_clears_the_queue_and_resets_the_panel():
+    ran, messages = await _run_with_queue("stop everything")
+    assert ran == ["first"]
+    assert {"type": "reset", "start_over": False} in messages
+    assert [m["text"] for m in messages if m["type"] == "agent_response"] == ["Stopped: first"]
+
+
+@pytest.mark.asyncio
+async def test_start_over_when_idle():
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": "Start over."}))
+            assert json.loads(await asyncio.wait_for(ws.recv(), timeout=2)) == {"type": "reset", "start_over": True}
+            assert json.loads(await asyncio.wait_for(ws.recv(), timeout=2)) == {
+                "type": "agent_response", "text": "Starting over. What would you like to do?"}
 
 
 @pytest.mark.asyncio
@@ -413,9 +440,45 @@ async def test_stop_when_idle_replies():
         port = ws_server.sockets[0].getsockname()[1]
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             await asyncio.sleep(0.05)
-            await ws.send(json.dumps({"type": "user_said", "text": "cancel"}))
+            await ws.send(json.dumps({"type": "user_said", "text": "stop stop"}))
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
-            assert msg == {"type": "agent_response", "text": "Stopped."}
+            assert msg == {"type": "agent_response", "text": "Nothing to stop."}
+
+
+@pytest.mark.asyncio
+async def test_cancel_at_a_question_answers_no():
+    """At 'Should I submit?', saying 'cancel' means no — the task continues and nothing is sent."""
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        answers = []
+        cancelled = []
+
+        async def asking_agent(text):
+            answers.append(await server.ask_user("Should I submit?", yes_no=True))
+            return "Not submitted."
+
+        server.on_user_input = asking_agent
+        server.on_cancel = lambda: cancelled.append(True)
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": "fill the form"}))
+            while json.loads(await asyncio.wait_for(ws.recv(), timeout=2))["type"] != "ask_user":
+                pass
+            await ws.send(json.dumps({"type": "user_said", "text": "Cancel."}))
+            while True:
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+                if msg["type"] == "agent_response":
+                    break
+        assert answers == [{"answer": "No"}]
+        assert cancelled == []  # the task wasn't killed; it heard "no"
+        assert msg["text"] == "Not submitted."
+
+
+def test_control_phrases_are_exact():
+    assert server.control_phrase("Stop! stop.") == "stop"
+    assert server.control_phrase("Stop everything.") == "stop everything"
+    for normal in ["cancel my subscription", "stop the video", "start over the form from page one"]:
+        assert server.control_phrase(normal) not in server.STOP_ONE | server.STOP_ALL | server.CANCEL
 
 
 @pytest.mark.asyncio

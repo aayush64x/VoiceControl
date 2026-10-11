@@ -1053,7 +1053,7 @@ def _run_agent(text, tier):
         print(f"[strands] {stats['summary']}")
         _emit({"type": "stats", **stats})
     if getattr(response, "stop_reason", None) == "cancelled":
-        return "Stopped."
+        return f"Stopped: {text}"
     return str(response)
 
 

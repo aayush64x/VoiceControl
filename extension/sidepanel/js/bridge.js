@@ -189,6 +189,7 @@
     if (!pendingSend) return;
     pendingSend = false;
     if (!text) { restoreView(); return; }
+    if (handleLocalControl(text)) return;
 
     if (question && !isStopCommand(text)) {
       // A question is open: what the user says is the answer, not a new command
@@ -201,8 +202,62 @@
     }
   }
 
+  /* ---------------- Control words ---------------- */
+  // Instant, work at any moment, and always win over answering a question.
+  // Only these exact short phrases count ("cancel my subscription" is a request).
+  //  - backend ones affect the agent: sent as commands
+  //  - local ones only affect the panel: handled here, nothing is sent
+
+  function controlPhrase(text) {
+    const words = (text || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean);
+    return words.filter((w, i) => i === 0 || w !== words[i - 1]).join(' ');
+  }
+
+  const BACKEND_CONTROL = new Set([
+    'stop', 'stop it', 'stop that', 'halt', 'never mind', 'nevermind',
+    'stop everything', 'stop all', 'stop all of it', 'start over', 'reset',
+    'cancel', 'cancel that', 'cancel it',
+  ]);
+  const QUIET = new Set(['quiet', 'be quiet', 'stop talking', 'shut up', 'silence', 'hush']);
+  const REPEAT = new Set(['repeat', 'repeat that', 'say that again', 'again', 'what did you say']);
+  const HELP = new Set(['help', 'what can i say', 'commands', 'what can you do']);
+
   function isStopCommand(text) {
-    return /^(stop|cancel|stop it|never mind|nevermind)[.!]?$/i.test(text.trim());
+    return BACKEND_CONTROL.has(controlPhrase(text));
+  }
+
+  const HELP_TEXT = 'Say what you want done, like \u201Cwhat benefits do I qualify for\u201D. Control words: '
+    + 'stop, stop everything, cancel, quiet, repeat, help, and start over. '
+    + 'Settings: settings overlay on or off, settings speak on or off.';
+
+  let lastReply = '';
+
+  // Panel-only control words. Returns true if handled (nothing is sent).
+  function handleLocalControl(text) {
+    const phrase = controlPhrase(text);
+    if (QUIET.has(phrase)) {
+      stopSpeaking();
+      if (question) showQuestion(); else restoreView();
+      return true;
+    }
+    if (REPEAT.has(phrase)) {
+      if (question) {
+        showQuestion();
+        speak(question.text, true);
+      } else if (lastReply) {
+        showResult(lastReply);
+        speak(speakableReply(lastReply), true);
+      } else {
+        restoreView();
+      }
+      return true;
+    }
+    if (HELP.has(phrase)) {
+      P.setState('done', { eyebrow: 'Help', title: 'What you can say', sub: HELP_TEXT });
+      speak(HELP_TEXT, true);
+      return true;
+    }
+    return false;
   }
 
   const NUMBER_WORDS = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
@@ -244,7 +299,11 @@
     P.setState('thinking', { sub: `“${text}”` });
   }
 
-  P.on('text', (text) => (question ? answer(text) : sendCommand(text)));
+  P.on('text', (text) => {
+    if (handleLocalControl(text)) return;
+    if (question && !isStopCommand(text)) answer(text);
+    else sendCommand(text);
+  });
   P.on('stop', () => send({ type: 'user_said', text: 'stop' }));
   P.on('retry', () => { if (lastCommand) sendCommand(lastCommand); else P.setState('idle'); });
   P.on('new', () => P.setState('idle'));
@@ -300,7 +359,11 @@
     question = null;
   }
 
-  P.on('answer', (text) => (question ? answer(normalizeAnswer(text, question.yesNo, question.view.data.options)) : sendCommand(text)));
+  P.on('answer', (text) => {
+    if (handleLocalControl(text)) return;
+    if (question && !isStopCommand(text)) answer(normalizeAnswer(text, question.yesNo, question.view.data.options));
+    else sendCommand(text);
+  });
   P.on('confirm', () => { if (question) answer('Yes'); });
   P.on('cancel', () => {
     if (question) answer('No');
@@ -476,8 +539,8 @@
 
   function showResult(text) {
     const reply = cleanReply(text);
-    if (reply === 'Stopped.') {
-      P.setState('idle', { title: 'Stopped.', sub: 'Tap the mic or press Space for a new request.' });
+    if (/^(Stopped|Nothing to stop|Starting over)/.test(reply)) {
+      P.setState('idle', { title: reply.split(/[:.]/)[0] + '.', sub: reply.includes(':') ? reply : 'Press to talk when you\u2019re ready.' });
     } else if (/^(error|couldn't|could not|i couldn't|i was unable|unable)\b/i.test(reply)) {
       P.setState('error', { sub: reply });
     } else {
@@ -509,6 +572,15 @@
         P.setProgress(`Next up: “${msg.text}”`);
         return;
 
+      case 'reset':
+        // "stop everything" / "start over": quiet, not listening, nothing open
+        stopSpeaking();
+        if (recording) stopRecording(false);
+        pendingSend = false;
+        endForm();
+        closeQuestion();
+        return;
+
       case 'question_cancelled':
         closeQuestion();
         P.setState('working', { sub: 'Switching to your new request…' });
@@ -517,6 +589,7 @@
       case 'agent_response':
         endForm();
         closeQuestion();
+        lastReply = msg.text || '';
         showResult(msg.text);
         // Spoken only when the user asked ("read it out loud") or always-speak is on
         speak(speakableReply(msg.text), msg.speak);
@@ -524,7 +597,7 @@
 
       case 'ask_user': {
         formInProgress = true;
-        question = { reply, yesNo: !!msg.yes_no, view: questionView(msg.question || '', !!msg.yes_no) };
+        question = { reply, yesNo: !!msg.yes_no, text: msg.question || '', view: questionView(msg.question || '', !!msg.yes_no) };
         const early = takeHeldAnswer();
         if (early) {
           // Already answered: no need to read it out

@@ -314,3 +314,76 @@ describe("single button", () => {
     }
   });
 });
+
+describe("control words", () => {
+  const say = (ws, text) => {
+    document.getElementById("mic-btn").click();
+    document.getElementById("mic-btn").click();
+    ws.receive({ type: "transcript", text, is_final: true });
+  };
+
+  test("'repeat' at a question repeats it instead of answering it", () => {
+    const { P, ws } = loadPanel();
+    ws.open();
+    ws.receive({ id: 1, type: "ask_user", yes_no: true, question: "Are you married?" });
+    say(ws, "repeat");
+    expect(ws.sent.filter((m) => m.id === 1)).toEqual([]); // not answered
+    expect(P.state).toBe("ask");
+    expect(title()).not.toBe("");
+  });
+
+  test("'quiet' and 'help' are handled in the panel; nothing is sent", () => {
+    const { P, ws } = loadPanel();
+    ws.open();
+    say(ws, "Quiet.");
+    say(ws, "what can I say");
+    jest.advanceTimersByTime(200);
+    expect(ws.sent.filter((m) => m.type === "user_said")).toEqual([]);
+    expect(P.state).toBe("done");
+    expect(title()).toBe("What you can say");
+    expect(sub()).toMatch(/stop, stop everything, cancel, quiet, repeat, help, and start over/);
+  });
+
+  test("'stop', 'stop everything' and 'cancel' go to the backend, even at a question", () => {
+    const { ws } = loadPanel();
+    ws.open();
+    ws.receive({ id: 2, type: "ask_user", yes_no: true, question: "Should I submit?" });
+    say(ws, "cancel");
+    expect(ws.sent).toContainEqual({ type: "user_said", text: "cancel" });
+    expect(ws.sent.filter((m) => m.id === 2)).toEqual([]); // the backend answers it
+    say(ws, "Stop everything.");
+    expect(ws.sent).toContainEqual({ type: "user_said", text: "Stop everything." });
+  });
+
+  test("a longer sentence with a control word is a normal request", () => {
+    const { ws } = loadPanel();
+    ws.open();
+    say(ws, "cancel my subscription");
+    expect(ws.sent).toContainEqual({ type: "user_said", text: "cancel my subscription" });
+  });
+
+  test("'stop everything' resets the panel: question closed, back to idle", () => {
+    const { P, ws } = loadPanel();
+    ws.open();
+    ws.receive({ type: "agent_thinking", text: "benefits" });
+    ws.receive({ id: 3, type: "ask_user", yes_no: true, question: "Are you married?" });
+    ws.receive({ type: "reset", start_over: false });
+    ws.receive({ type: "agent_response", text: "Stopped: benefits" });
+    jest.advanceTimersByTime(200);
+    expect(P.state).toBe("idle");
+    expect(title()).toBe("Stopped.");
+    say(ws, "yes"); // no question is open any more: this is a new request
+    expect(ws.sent).toContainEqual({ type: "user_said", text: "yes" });
+  });
+
+  test("'repeat' after a reply reads the reply again", () => {
+    const { P, ws } = loadPanel();
+    ws.open();
+    ws.receive({ type: "agent_response", text: "Chicago tomorrow: sunny, high of 73." });
+    P.setState("idle");
+    say(ws, "say that again");
+    jest.advanceTimersByTime(200);
+    expect(P.state).toBe("done");
+    expect(sub()).toBe("Chicago tomorrow: sunny, high of 73.");
+  });
+});
