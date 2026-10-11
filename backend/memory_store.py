@@ -17,7 +17,7 @@ from strands.storage.search import Bm25SearchStrategy
 class LocalMemoryStore:
     name = "user_details"
     description = "Remembered user details — name, address, phone, email, disability, etc."
-    max_search_results = 10
+    max_search_results = 30  # all saved details fit; forms need most of them at once
     writable = True
     extraction = False
 
@@ -54,6 +54,16 @@ class LocalMemoryStore:
             "veteran": "The user is {v} a veteran",
             "employed": "The user is {v} employed",
             "income": "The user income is {v}",
+            # SSA eligibility questionnaire answers. Marital status is left out on
+            # purpose so the agent asks one missing-detail question during the demo.
+            "worked_and_paid_social_security_taxes": "The user has {v} worked and paid Social Security taxes",
+            "unable_to_work_due_to_condition": "The user is {v} unable to work because of a condition",
+            "condition_lasts_a_year_or_more": "The user's condition will {v} affect their ability to work for a year or more",
+            "condition_started": "The user's condition started affecting their ability to work {v}",
+            "little_or_no_income": "The user does {v} have little or no income and finds it hard to pay for essentials",
+            "household_benefits": "Household benefits: {v}",
+            "resources_value": "The value of the user's resources (things they own) is {v}",
+            "permanent_kidney_failure": "The user does {v} have permanent kidney failure",
         }
 
         for key, template in field_map.items():
@@ -62,7 +72,7 @@ class LocalMemoryStore:
             val = details[key]
             if isinstance(val, bool):
                 val = "" if val else "not"
-            text = template.format(v=val)
+            text = " ".join(template.format(v=val).split())
             await self._storage.write(key, text.encode("utf-8"))
 
     async def search(self, query, options=None):

@@ -199,3 +199,39 @@ class TestSearchShortcuts:
 
     def test_search_shortcut_classified_direct(self):
         assert classify("search cat videos on youtube") == "direct"
+
+
+class TestFormatPage:
+    def test_includes_headings_errors_and_question_labels(self):
+        from agent import _format_page
+        out = _format_page({
+            "title": "Questionnaire",
+            "count": 2,
+            "context": {"headings": ["Are you married?"], "errors": ["Select an answer."]},
+            "elements": [
+                {"num": 4, "type": "radio", "label": "Are you married? → No", "value": " [unchecked]"},
+                {"num": 9, "type": "button", "label": "Next", "value": ""},
+            ],
+        })
+        assert "Headings: Are you married?" in out
+        assert "ERRORS ON PAGE: Select an answer." in out
+        assert "4: [radio] Are you married? → No =  [unchecked]" in out
+
+    def test_no_context_is_fine(self):
+        from agent import _format_page
+        out = _format_page({"title": "T", "count": 0, "elements": []})
+        assert "Headings" not in out and "ERRORS" not in out
+
+
+class TestSeededDetails:
+    def test_ssa_answers_seeded_and_marital_status_left_out(self, tmp_path):
+        import asyncio
+        from memory_store import LocalMemoryStore
+        store = LocalMemoryStore(str(tmp_path))
+        asyncio.run(store.initialize())
+        keys = asyncio.run(store._storage.list())
+        assert "worked_and_paid_social_security_taxes" in keys
+        assert "permanent_kidney_failure" in keys
+        assert not any("married" in k or "marital" in k for k in keys)
+        text = asyncio.run(store._storage.read("permanent_kidney_failure")).decode()
+        assert text == "The user does not have permanent kidney failure"

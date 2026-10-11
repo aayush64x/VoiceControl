@@ -23,8 +23,37 @@ function isVisible(el) {
 }
 
 // --- Labels ---
+function cleanText(text) {
+  return (text || "").replace(/\s+/g, " ").trim();
+}
+
+// Text of a <label>, without the text of controls inside it (e.g. every <option> of a wrapped <select>)
+function labelText(label) {
+  const clone = label.cloneNode(true);
+  clone.querySelectorAll("input, select, textarea, button").forEach((c) => c.remove());
+  return cleanText(clone.textContent);
+}
+
+// Text of the elements named by aria-labelledby / aria-describedby
+function textOfIds(ids) {
+  if (!ids) return "";
+  return cleanText(ids.split(/\s+/).map((id) => {
+    const ref = document.getElementById(id);
+    return ref ? ref.textContent : "";
+  }).join(" "));
+}
+
 function getLabel(el) {
   if (el.getAttribute("aria-label")) return el.getAttribute("aria-label");
+  const labelledBy = textOfIds(el.getAttribute("aria-labelledby"));
+  if (labelledBy) return labelledBy;
+
+  // Native labels: <label for="id"> and <label> wrapping the control
+  if (el.labels && el.labels.length) {
+    const text = labelText(el.labels[0]);
+    if (text) return text;
+  }
+
   if (el.title) return el.title;
   if (el.placeholder) return el.placeholder;
   if (isRichTextBox(el)) {
@@ -35,16 +64,28 @@ function getLabel(el) {
     if (!textOf(el).trim()) return "text box";
   }
 
-  if (el.id) {
-    const label = document.querySelector(`label[for="${el.id}"]`);
-    if (label) return label.textContent.trim();
-  }
-
-  const text = el.textContent.trim();
+  const text = cleanText(el.textContent);
   if (text && text.length < 80) return text;
 
   if (el.tagName === "INPUT") return el.type || "input";
   return el.tagName.toLowerCase();
+}
+
+// The question a radio/checkbox answers, e.g. "Are you married?" for a "Yes" option.
+// Forms put it on a <fieldset><legend> or an ARIA radiogroup/group label.
+function getGroupQuestion(el) {
+  if (!isChoice(el)) return "";
+  const fieldset = el.closest("fieldset");
+  if (fieldset) {
+    const legend = fieldset.querySelector("legend");
+    if (legend && cleanText(legend.textContent)) return cleanText(legend.textContent);
+  }
+  const group = el.closest("[role='radiogroup'], [role='group']");
+  if (group) {
+    const text = group.getAttribute("aria-label") || textOfIds(group.getAttribute("aria-labelledby"));
+    if (text) return cleanText(text);
+  }
+  return "";
 }
 
 // --- Element type ---
@@ -60,9 +101,39 @@ function isRichTextBox(el) {
   return (ce !== null && ce !== "false") || el.getAttribute("role") === "textbox";
 }
 
+// Radio buttons and checkboxes, native or custom-built (role="radio" divs, e.g. Google Forms)
+function isChoice(el) {
+  if (el.tagName === "INPUT") return el.type === "checkbox" || el.type === "radio";
+  const role = el.getAttribute("role");
+  return role === "radio" || role === "checkbox" || role === "switch" || role === "option";
+}
+
+function isChecked(el) {
+  if (el.tagName === "INPUT") return el.checked;
+  return el.getAttribute("aria-checked") === "true" || el.getAttribute("aria-selected") === "true";
+}
+
+// Styled forms hide the real radio/checkbox and show its <label> instead.
+// Returns what the user actually sees for an element — used for visibility,
+// scrolling and number tags.
+function visibleTarget(el) {
+  if (isVisible(el)) return el;
+  if (el.tagName === "INPUT" && isChoice(el) && el.labels) {
+    for (const label of el.labels) {
+      if (isVisible(label)) return label;
+    }
+  }
+  return null;
+}
+
 function getElementType(el) {
   const tag = el.tagName;
   if (isRichTextBox(el)) return "field";
+  const role = el.getAttribute("role");
+  if (role === "radio") return "radio";
+  if (role === "checkbox" || role === "switch") return "checkbox";
+  if (role === "option") return "option";
+  if (role === "combobox" || role === "listbox") return "dropdown";
   if (tag === "A") return "link";
   if (tag === "BUTTON" || (tag === "INPUT" && el.type === "submit")) return "button";
   if (tag === "INPUT") return el.type === "checkbox" ? "checkbox" : el.type === "radio" ? "radio" : "field";
@@ -80,11 +151,13 @@ function listElements() {
   const newMap = {};
   const results = [];
 
-  const selectors = "a, button, input, textarea, select, [role='button'], [role='link'], [tabindex], [contenteditable]:not([contenteditable='false']), [role='textbox']";
+  const selectors = "a, button, input, textarea, select, [role='button'], [role='link'], [tabindex], "
+    + "[contenteditable]:not([contenteditable='false']), [role='textbox'], "
+    + "[role='radio'], [role='checkbox'], [role='switch'], [role='option'], [role='combobox']";
   const elements = document.querySelectorAll(selectors);
 
   for (const el of elements) {
-    if (!isVisible(el)) continue;
+    if (!visibleTarget(el)) continue;
     if (el.tagName === "INPUT" && el.type === "hidden") continue;
     if (el.closest("[aria-hidden='true']")) continue;
     // Skip elements inside an editor — only the editor itself is a target
@@ -101,7 +174,11 @@ function listElements() {
     newMap[num] = el;
 
     const type = getElementType(el);
-    const label = getLabel(el);
+    let label = getLabel(el).substring(0, 80);
+    const question = getGroupQuestion(el);
+    if (question && question !== label) {
+      label = `${question.substring(0, 120)} → ${label}`;
+    }
 
     let value = "";
     if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
@@ -118,11 +195,11 @@ function listElements() {
         value += ` options: ${opts.join(", ")}`;
       }
     }
-    if (el.type === "checkbox" || el.type === "radio") {
-      value = el.checked ? " [checked]" : " [unchecked]";
+    if (isChoice(el)) {
+      value = isChecked(el) ? " [checked]" : " [unchecked]";
     }
 
-    results.push({ num, type, label: label.substring(0, 60), value });
+    results.push({ num, type, label, value });
   }
 
   elementMap = newMap;
@@ -140,7 +217,7 @@ function showOverlays() {
   clearOverlays();
   const container = getOverlayContainer();
   for (const [num, el] of Object.entries(elementMap)) {
-    const rect = el.getBoundingClientRect();
+    const rect = (visibleTarget(el) || el).getBoundingClientRect();
     const tag = document.createElement("div");
     tag.textContent = num;
     tag.dataset.overlayFor = num;
@@ -169,7 +246,7 @@ function updateOverlayPositions() {
     const num = tag.dataset.overlayFor;
     const el = elementMap[num];
     if (!el) continue;
-    const rect = el.getBoundingClientRect();
+    const rect = (visibleTarget(el) || el).getBoundingClientRect();
     tag.style.left = (rect.left - 2) + "px";
     tag.style.top = (rect.top - 2) + "px";
   }
@@ -208,7 +285,7 @@ if (typeof MutationObserver !== "undefined") {
 
 // --- Fix 5: Scroll into view accounting for sticky headers ---
 function scrollToElement(el) {
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  (visibleTarget(el) || el).scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 // --- Fix 4: React-compatible typing ---
@@ -277,6 +354,65 @@ function findSendButton(el) {
   return null;
 }
 
+// Custom dropdowns (role="combobox"/"listbox", e.g. Google Forms): open it, then click the matching option
+function selectCustomOption(el, element, value) {
+  const role = el.getAttribute("role");
+  if (role !== "combobox" && role !== "listbox") {
+    return { success: false, error: `Element ${element} is not a dropdown.` };
+  }
+  el.click();
+  const lv = cleanText(value).toLowerCase();
+  // The option list is usually linked by aria-controls/aria-owns; otherwise search the page
+  const listId = el.getAttribute("aria-controls") || el.getAttribute("aria-owns");
+  const owned = listId ? document.getElementById(listId.split(/\s+/)[0]) : null;
+  const scope = owned || (role === "listbox" ? el : document);
+  const options = Array.from(scope.querySelectorAll("[role='option']"));
+  const text = (o) => cleanText(o.getAttribute("aria-label") || o.getAttribute("data-value") || o.textContent).toLowerCase();
+  const option = options.find((o) => text(o) === lv) || options.find((o) => text(o).includes(lv));
+  if (!option) {
+    return {
+      success: false,
+      error: `Opened dropdown ${element} but no option matches "${value}". Call read_page and click the option directly.`,
+    };
+  }
+  option.click();
+  return { success: true, action: "select", element, value: cleanText(option.textContent) || value };
+}
+
+// --- Page context: headings and error messages ---
+// read_page only lists controls; this adds what the page is asking and any
+// validation errors, so the agent can see "Enter a valid date" and fix it.
+function getPageContext() {
+  const seen = new Set();
+  const collect = (selector, limit) => {
+    const out = [];
+    for (const node of document.querySelectorAll(selector)) {
+      if (out.length >= limit) break;
+      if (node.closest("#voice-agent-overlays")) continue;
+      if (!isVisible(node)) continue;
+      const text = cleanText(node.textContent).substring(0, 150);
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      out.push(text);
+    }
+    return out;
+  };
+  const headings = collect("h1, h2, h3, legend, [role='heading']", 6);
+  const errors = collect(
+    "[role='alert'], [aria-live='assertive'], .error, .error-message, .usa-error-message, .invalid-feedback, [class*='error-message'], [class*='errorMessage']",
+    5,
+  );
+  // Fields marked invalid point at their own error text
+  for (const field of document.querySelectorAll("[aria-invalid='true']")) {
+    const text = textOfIds(field.getAttribute("aria-describedby") || field.getAttribute("aria-errormessage"));
+    if (text && !seen.has(text) && errors.length < 5) {
+      seen.add(text);
+      errors.push(`${getLabel(field)}: ${text}`.substring(0, 150));
+    }
+  }
+  return { headings, errors };
+}
+
 // --- Fix 2: Every action reports back clearly ---
 function doAction(action, element, value, submit = false) {
   if (action === "scroll") {
@@ -308,7 +444,7 @@ function doAction(action, element, value, submit = false) {
   const el = elementMap[element];
   if (!el) return { success: false, error: `Element ${element} not found. Run read first to get the current element list.` };
 
-  if (!isVisible(el)) return { success: false, error: `Element ${element} is no longer visible on the page.` };
+  if (!visibleTarget(el)) return { success: false, error: `Element ${element} is no longer visible on the page.` };
 
   if (el.disabled) return { success: false, error: `Element ${element} (${getLabel(el)}) is disabled.` };
 
@@ -321,7 +457,9 @@ function doAction(action, element, value, submit = false) {
     if (el.type === "checkbox" || el.type === "radio") {
       el.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    return { success: true, action: "click", element, label: getLabel(el), navigated: willNavigate };
+    const result = { success: true, action: "click", element, label: getLabel(el), navigated: willNavigate };
+    if (isChoice(el)) result.checked = isChecked(el);
+    return result;
   }
 
   if (action === "type") {
@@ -359,7 +497,7 @@ function doAction(action, element, value, submit = false) {
   }
 
   if (action === "select") {
-    if (el.tagName !== "SELECT") return { success: false, error: `Element ${element} is not a dropdown.` };
+    if (el.tagName !== "SELECT") return selectCustomOption(el, element, value);
     const lv = value.toLowerCase();
     const opts = Array.from(el.options);
     const option =
@@ -411,7 +549,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage 
     if (message.type === "list_elements") {
       const elements = listElements();
       showOverlays();
-      sendResponse({ elements, count: elements.length });
+      sendResponse({ elements, count: elements.length, title: document.title, url: location.href, context: getPageContext() });
       return true;
     }
     if (message.type === "action") {
@@ -467,5 +605,5 @@ function resetForTest() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isVisible, getLabel, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
+  module.exports = { isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
 }

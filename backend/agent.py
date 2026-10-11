@@ -172,6 +172,11 @@ def _bridge(coro, timeout=15):
 def _format_page(result):
     """Format page data into a string for the agent."""
     lines = [f"Page: {result.get('title', 'Unknown')} — {result.get('count', 0)} elements"]
+    context = result.get("context") or {}
+    if context.get("headings"):
+        lines.append("Headings: " + " | ".join(context["headings"]))
+    if context.get("errors"):
+        lines.append("ERRORS ON PAGE: " + " | ".join(context["errors"]))
     for el in result.get("elements", []):
         line = f"  {el['num']}: [{el['type']}] {el['label']}"
         if el.get("value"):
@@ -330,7 +335,8 @@ Efficiency rules:
 - Take the SHORTEST path. Use search boxes instead of browsing menus.
 - Combine multiple field fills into one fill_form call.
 - Do NOT go back and retry more than once. If stuck, say so and stop.
-- Maximum 15 tool calls per task. If not done by then, report progress and stop.
+- Maximum 15 tool calls for ordinary tasks, 40 for filling a multi-page form or questionnaire. \
+If not done by then, report progress and stop.
 
 Action rules:
 - ALWAYS read_page before your first action.
@@ -353,19 +359,30 @@ Chat boxes may show as [field] with a label like "Ask anything" or "text box".
 Self-correction rules:
 - After a search or sending a message, ONE read_page to confirm, then stop. Do not re-search.
 - After filling a form or clicking a button, read_page again to verify it worked.
-- If a field shows an error message or validation failure, read the error, fix the value, and retry.
+- If read_page shows "ERRORS ON PAGE", fix those fields first, then continue.
 - If a click did not navigate or change the page, try a different approach.
 - If an element number is stale, call read_page to get fresh numbers.
 - Never claim a task is complete without verifying the page shows the expected result.
 
 Form filling rules:
-- Use search_memory to find saved user details before filling forms.
+- Use search_memory ONCE at the start to load all saved user details. Don't search again for each question.
 - Match form labels to remembered details by meaning (e.g. "First Name" matches remembered first name).
+- Radio buttons and checkboxes are shown as "Question → Answer" (e.g. "Are you married? → No"). \
+Pick the option whose question AND answer match the user's details.
+- Work out answers from saved details when you can (e.g. a 1985 birth date and a 2021 condition start \
+means the condition started after their 22nd birthday).
+- Split dates into the parts the form asks for (separate Month / Day / Year fields: 03, 14, 1985).
+- Multi-page forms and questionnaires (one question per page): answer AND click Next/Continue in ONE \
+fill_form call, e.g. fill_form([{"element": 7, "action": "click"}, {"element": 12, "action": "click"}]). \
+Then read_page for the next question. That is two steps per page — never more unless there is an error.
 - For dropdowns, use act("select", element, value).
 - For checkboxes and radio buttons, use act("click", element).
 - If a form asks for information NOT in memory, use ask_user to ask the user.
 - When the user provides new information, use add_memory to save it for next time.
-- ALWAYS ask_user before submitting a form: "Ready to submit. Should I go ahead?"
+- ALWAYS ask_user before a FINAL submit that sends the user's data (Submit, Send, Apply, Sign up): \
+"Ready to submit. Should I go ahead?" Next/Continue between questionnaire pages is NOT a submit — don't ask.
+- When a questionnaire shows its results page, read the results to the user in 2-3 short sentences \
+(what they may be eligible for), then stop.
 - Fill as many fields as possible in one fill_form call.
 
 Output rules:

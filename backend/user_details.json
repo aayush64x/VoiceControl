@@ -12,5 +12,13 @@
   "disability_start_date": "2021-06-10",
   "veteran": false,
   "employed": false,
-  "income": "0"
+  "income": "0",
+  "worked_and_paid_social_security_taxes": true,
+  "unable_to_work_due_to_condition": true,
+  "condition_lasts_a_year_or_more": true,
+  "condition_started": "after my 22nd birthday",
+  "little_or_no_income": true,
+  "household_benefits": "no one in my household gets government benefits like SNAP, Medicaid, or TANF",
+  "resources_value": "$0 to $2,000",
+  "permanent_kidney_failure": false
 }

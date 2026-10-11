@@ -254,13 +254,13 @@ describe("listElements", () => {
     expect(results[0].label).toBe("button");
   });
 
-  test("truncates label at 60 chars via substring", () => {
-    const text = "B".repeat(70);
+  test("truncates label at 80 chars via substring", () => {
+    const text = "B".repeat(100);
     document.body.innerHTML = `<button aria-label="${text}">Click</button>`;
     document.querySelectorAll("button").forEach(makeVisible);
 
     const results = listElements();
-    expect(results[0].label.length).toBe(60);
+    expect(results[0].label.length).toBe(80);
   });
 });
 
@@ -681,5 +681,145 @@ describe("type with submit on normal inputs", () => {
     const result = doAction("type", num, "Jordan");
     expect(form.requestSubmit).not.toHaveBeenCalled();
     expect(result.submitted).toBeUndefined();
+  });
+});
+
+describe("real-world forms", () => {
+  const { getGroupQuestion, getPageContext } = content;
+  const visibleAll = () => document.querySelectorAll("*").forEach(makeVisible);
+
+  test("radio options include their fieldset question", () => {
+    document.body.innerHTML = `
+      <fieldset><legend>Are you married?</legend>
+        <input type="radio" id="y" name="m"><label for="y">Yes</label>
+        <input type="radio" id="n" name="m"><label for="n">No</label>
+      </fieldset>`;
+    visibleAll();
+    const labels = listElements().map((e) => e.label);
+    expect(labels).toEqual(["Are you married? → Yes", "Are you married? → No"]);
+  });
+
+  test("radio options include an ARIA radiogroup question", () => {
+    document.body.innerHTML = `
+      <h3 id="q">Have you ever worked and paid Social Security taxes?</h3>
+      <div role="radiogroup" aria-labelledby="q">
+        <div role="radio" aria-checked="true" aria-label="Yes" tabindex="0"></div>
+        <div role="radio" aria-checked="false" aria-label="No" tabindex="-1"></div>
+      </div>`;
+    visibleAll();
+    const radios = listElements().filter((e) => e.type === "radio");
+    expect(radios).toHaveLength(2);
+    expect(radios[0].label).toBe("Have you ever worked and paid Social Security taxes? → Yes");
+    expect(radios[0].value).toBe(" [checked]");
+    expect(radios[1].value).toBe(" [unchecked]");
+  });
+
+  test("getGroupQuestion is empty for non-choice fields", () => {
+    document.body.innerHTML = `<fieldset><legend>Name</legend><input type="text" id="t"></fieldset>`;
+    expect(getGroupQuestion(document.getElementById("t"))).toBe("");
+  });
+
+  test("wrapping <label> is used as the label", () => {
+    document.body.innerHTML = `<label>First name <input type="text"></label>`;
+    visibleAll();
+    expect(listElements()[0].label).toBe("First name");
+  });
+
+  test("wrapping label around a select does not include option text", () => {
+    document.body.innerHTML = `<label>State <select><option value="MO">Missouri</option><option value="KS">Kansas</option></select></label>`;
+    visibleAll();
+    expect(listElements()[0].label).toBe("State");
+  });
+
+  test("aria-labelledby is used as the label", () => {
+    document.body.innerHTML = `<span id="dob">Date of birth (month)</span><input type="text" aria-labelledby="dob">`;
+    visibleAll();
+    const field = listElements().find((e) => e.type === "field");
+    expect(field.label).toBe("Date of birth (month)");
+  });
+
+  test("label beats placeholder", () => {
+    document.body.innerHTML = `<label for="e">Email address</label><input id="e" placeholder="you@example.com">`;
+    visibleAll();
+    expect(listElements().find((e) => e.type === "field").label).toBe("Email address");
+  });
+
+  test("visually hidden radio with a visible label is still listed and clickable", () => {
+    document.body.innerHTML = `
+      <fieldset><legend>Do you have permanent kidney failure?</legend>
+        <input type="radio" id="k1" name="k" class="sr-only"><label for="k1">Yes</label>
+        <input type="radio" id="k2" name="k" class="sr-only"><label for="k2">No</label>
+      </fieldset>`;
+    // Only the labels are visible — the real inputs are hidden (no offsetParent)
+    document.querySelectorAll("label, legend, fieldset").forEach(makeVisible);
+    const radios = listElements().filter((e) => e.type === "radio");
+    expect(radios.map((r) => r.label)).toEqual([
+      "Do you have permanent kidney failure? → Yes",
+      "Do you have permanent kidney failure? → No",
+    ]);
+    const result = doAction("click", radios[1].num);
+    expect(result.success).toBe(true);
+    expect(result.checked).toBe(true);
+    expect(document.getElementById("k2").checked).toBe(true);
+  });
+
+  test("hidden radio without a visible label is not listed", () => {
+    document.body.innerHTML = `<input type="radio" id="x"><label for="x">Ghost</label>`;
+    expect(listElements()).toHaveLength(0);
+  });
+
+  test("custom role=checkbox reports checked state", () => {
+    document.body.innerHTML = `<div role="checkbox" aria-checked="true" aria-label="I agree"></div>`;
+    visibleAll();
+    const el = listElements()[0];
+    expect(el.type).toBe("checkbox");
+    expect(el.value).toBe(" [checked]");
+  });
+
+  test("select on a custom combobox clicks the matching option", () => {
+    document.body.innerHTML = `
+      <div role="combobox" aria-label="Preferred time" aria-controls="list" tabindex="0">Choose</div>
+      <div id="list" role="listbox">
+        <div role="option">Morning</div><div role="option">Afternoon</div>
+      </div>`;
+    visibleAll();
+    const opened = jest.fn();
+    const combo = document.querySelector("[role='combobox']");
+    combo.addEventListener("click", opened);
+    const picked = jest.fn();
+    document.querySelectorAll("[role='option']")[1].addEventListener("click", picked);
+    const num = listElements().find((e) => e.type === "dropdown").num;
+    const result = doAction("select", num, "afternoon");
+    expect(result.success).toBe(true);
+    expect(result.value).toBe("Afternoon");
+    expect(opened).toHaveBeenCalled();
+    expect(picked).toHaveBeenCalled();
+  });
+
+  test("select on a custom combobox with no match tells the agent what to do", () => {
+    document.body.innerHTML = `<div role="combobox" aria-label="Time" tabindex="0"></div><div role="option">Morning</div>`;
+    visibleAll();
+    const num = listElements().find((e) => e.type === "dropdown").num;
+    const result = doAction("select", num, "midnight");
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/read_page/);
+  });
+
+  test("getPageContext returns headings and error messages", () => {
+    document.body.innerHTML = `
+      <h1>Check eligibility</h1>
+      <legend>Enter your date of birth.</legend>
+      <div role="alert">Enter a valid year.</div>
+      <span id="err">Month must be 1 to 12</span>
+      <input aria-label="Month" aria-invalid="true" aria-describedby="err">`;
+    visibleAll();
+    const ctx = getPageContext();
+    expect(ctx.headings).toEqual(["Check eligibility", "Enter your date of birth."]);
+    expect(ctx.errors).toEqual(["Enter a valid year.", "Month: Month must be 1 to 12"]);
+  });
+
+  test("getPageContext ignores hidden errors", () => {
+    document.body.innerHTML = `<div role="alert">Hidden problem</div>`;
+    expect(getPageContext().errors).toEqual([]);
   });
 });
