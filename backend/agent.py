@@ -523,7 +523,7 @@ Efficiency rules:
 - Take the SHORTEST path. Use search boxes instead of browsing menus.
 - Combine multiple field fills into one fill_form call.
 - Do NOT go back and retry more than once. If stuck, say so and stop.
-- Maximum 15 tool calls for ordinary tasks, 60 for filling a multi-page form or questionnaire. \
+- Maximum 15 tool calls for ordinary tasks, 80 for finding and filling a multi-page form or questionnaire. \
 If not done by then, report progress and stop.
 
 Reading rules:
@@ -531,6 +531,23 @@ Reading rules:
 (weather, prices, article, results), call read_text.
 - If the user asks you to read something aloud / out loud / to them: get it with read_text, \
 then make your final reply the text to read — up to about 150 words of plain sentences.
+
+Finding where to do the task (no site is built in — you find it):
+- If the current page can't do what the user wants (a blank tab, or an unrelated site), find the \
+right website by searching: act("open", 0, "https://www.google.com/search?q=" + a clear query \
+describing the TASK, e.g. "check eligibility for disability benefits").
+- NEVER type or guess deep addresses (like site.gov/some-tool) — they 404. Search instead.
+- From the results, open the most OFFICIAL and relevant one: a government (.gov) site for government \
+benefits or services, the organization's own site otherwise — not ads, news or forums. When the user \
+wants to DO something (check, apply, sign up), prefer an interactive tool (eligibility checker, \
+questionnaire, application) over an article about it.
+- On that page, find the control that STARTS the task ("Start", "Check eligibility", "Begin", \
+"Get started", "Apply") and click it. Don't wander through menus hoping to find it: if it isn't \
+visible, scroll once or use the site's own search; if it's still not there, go back to the results \
+and try the next official result.
+- If the request is broad ("what benefits do I qualify for"), ask ONE short clarifying question only \
+if the answer changes where you'd go; otherwise choose the most complete official tool (one that \
+checks many benefit types at once).
 
 New tabs and site names:
 - If the user says "new tab" (e.g. "open Claude in a new tab"), use act("new_tab", 0, url). \
@@ -542,7 +559,8 @@ act("open") replaces the CURRENT tab — it is not a new tab.
 Action rules:
 - The first line "[You are on: …]" tells you the current page. Work on THAT page when it can do the \
 task (e.g. use its own search box). NEVER open the page you are already on.
-- ALWAYS read_page before your first action.
+- ALWAYS read_page before your first action on a page — except on a blank new tab, where there is \
+nothing to read: open a website first.
 - After any navigation, call read_page — old element numbers are no longer valid.
 - Use element numbers from the LATEST read_page (or the latest "Page now" in an action result).
 - If an action result includes "Page now", that IS the current page — don't call read_page again.
@@ -867,6 +885,12 @@ def _with_location(text):
     """
     page = server.last_page or {}
     url = page.get("url")
+    if page.get("unreadable"):
+        if not url or url.startswith(("chrome://newtab", "chrome://new-tab-page", "about:blank", "edge://newtab")):
+            where = "a blank new tab — open a website to start"
+        else:
+            where = f"{url} — a page the extension can't read (browser page or PDF); open a website to start"
+        return f"[You are on: {where}]\n{text}"
     if not url:
         return text
     title = page.get("title") or "untitled page"

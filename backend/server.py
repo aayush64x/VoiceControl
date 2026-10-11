@@ -298,10 +298,20 @@ async def wait_while_loading(timeout=None):
 
 
 def _remember_location(result):
-    """list_elements replies include the page title/URL — keep 'where the user is' current."""
+    """list_elements replies include the page title/URL — keep 'where the user is' current.
+
+    When the page can't be read (a blank new tab, chrome:// pages, PDFs) the error
+    still says which tab it is, so the agent isn't told it's on the last page it saw.
+    """
     global last_page
-    if isinstance(result, dict) and result.get("url"):
+    if not isinstance(result, dict):
+        return
+    if result.get("error"):
+        if "url" in result:
+            last_page = {"title": result.get("title", ""), "url": result.get("url", ""), "unreadable": True}
+    elif result.get("url"):
         last_page = {**(last_page or {}), "title": result.get("title", ""), "url": result["url"]}
+        last_page.pop("unreadable", None)
 
 
 async def list_elements():

@@ -633,3 +633,42 @@ class TestSettingsAnyWordOrder:
                      "show me cat videos", "overlay on off", "turn speech and overlay on",
                      "scroll down", "open the settings page"]:
             assert try_direct(text) in (None,) or try_direct(text)[0] not in ("overlays", "speak"), text
+
+
+class TestBlankTab:
+    """Starting from an empty tab: the agent must know it's on a blank tab, not the last page it saw."""
+
+    def test_unreadable_page_replaces_stale_location(self):
+        import server
+        server.last_page = {"title": "Weather", "url": "https://www.weather.gov/"}
+        server._remember_location({"error": "Could not reach this page.", "url": "chrome://newtab/", "title": "New Tab"})
+        assert server.last_page == {"title": "New Tab", "url": "chrome://newtab/", "unreadable": True}
+
+    def test_blank_tab_location_line(self):
+        import server
+        from agent import _with_location
+        server.last_page = {"title": "New Tab", "url": "chrome://newtab/", "unreadable": True}
+        assert _with_location("what benefits do I qualify for").startswith(
+            "[You are on: a blank new tab — open a website to start]")
+
+    def test_pdf_or_browser_page_location_line(self):
+        import server
+        from agent import _with_location
+        server.last_page = {"url": "chrome://extensions/", "unreadable": True}
+        assert "can't read" in _with_location("hi")
+
+    def test_readable_page_clears_unreadable(self):
+        import server
+        server.last_page = {"url": "chrome://newtab/", "unreadable": True}
+        server._remember_location({"elements": [], "count": 0, "title": "SSA", "url": "https://www.ssa.gov/"})
+        assert server.last_page == {"title": "SSA", "url": "https://www.ssa.gov/"}
+
+    def test_error_without_url_keeps_location(self):
+        import server
+        server.last_page = {"title": "SSA", "url": "https://www.ssa.gov/"}
+        server._remember_location({"error": "Timeout waiting for extension response."})
+        assert server.last_page["url"] == "https://www.ssa.gov/"
+
+    def test_broad_question_goes_to_sonnet(self):
+        assert classify("what benefits do I qualify for") == "sonnet"
+        assert parse_site_command("what benefits do I qualify for") is None

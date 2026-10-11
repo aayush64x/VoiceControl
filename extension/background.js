@@ -26,9 +26,9 @@ function forwardToTab(message, sendResponse) {
       sendResponse({ error: "No active tab" });
       return;
     }
-    const tabId = tabs[0].id;
-    await ensureContentScript(tabId);
-    sendToTab(tabId, message, sendResponse);
+    const tab = tabs[0];
+    await ensureContentScript(tab.id);
+    sendToTab(tab, message, sendResponse);
   });
 }
 
@@ -38,8 +38,10 @@ function forwardToTab(message, sendResponse) {
 // arrived, and retrying could click something twice — so never retry those.
 const NOT_DELIVERED = /Receiving end does not exist|Could not establish connection/i;
 
-function sendToTab(tabId, message, sendResponse, retried = false) {
-  chrome.tabs.sendMessage(tabId, message, (response) => {
+// Errors include the tab's address, so the agent knows it's on e.g. a blank
+// new tab (chrome://newtab) rather than the last page it could read.
+function sendToTab(tab, message, sendResponse, retried = false) {
+  chrome.tabs.sendMessage(tab.id, message, (response) => {
     const err = chrome.runtime.lastError;
     if (!err) {
       sendResponse(response);
@@ -47,12 +49,12 @@ function sendToTab(tabId, message, sendResponse, retried = false) {
     }
     if (!retried && NOT_DELIVERED.test(err.message || "")) {
       setTimeout(async () => {
-        await ensureContentScript(tabId);
-        sendToTab(tabId, message, sendResponse, true);
+        await ensureContentScript(tab.id);
+        sendToTab(tab, message, sendResponse, true);
       }, 400);
       return;
     }
-    sendResponse({ error: UNREACHABLE });
+    sendResponse({ error: UNREACHABLE, url: tab.url || tab.pendingUrl || "", title: tab.title || "" });
   });
 }
 
