@@ -540,8 +540,10 @@ Finding where to do the task (no site is built in — you find it):
 right website by searching: act("open", 0, "https://www.google.com/search?q=" + a clear query \
 describing the TASK, e.g. "check eligibility for disability benefits").
 - NEVER type or guess deep addresses (like site.gov/some-tool) — they 404. Search instead.
-- From the results, open the most OFFICIAL and relevant one: a government (.gov) site for government \
-benefits or services, the organization's own site otherwise — not ads, news or forums. When the user \
+- From the results, open the most OFFICIAL and relevant one. For government benefits or services, \
+open ONLY .gov results — skip non-profits, news, ads and other sites, even if they rank higher; use a \
+non-.gov site only if no .gov result is listed. Otherwise, use the organization's own site — not ads, \
+news or forums. When the user \
 wants to DO something (check, apply, sign up), prefer an interactive tool (eligibility checker, \
 questionnaire, application) over an article about it.
 - On that page, find the control that STARTS the task ("Start", "Check eligibility", "Begin", \
@@ -723,9 +725,10 @@ async def learn_site(page):
     if not domain:
         return
     # Don't learn error pages ("WordPress › Error", 404s, empty pages) as if they were the site
-    broken = page.get("count", 1) == 0 or re.search(r"\b(error|not found|404|can.t be reached)\b",
-                                                     page.get("title") or "", re.IGNORECASE)
-    if broken:
+    if page.get("count", 1) == 0:
+        print(f"[sites] not learning {domain} yet: the page has nothing on it (still loading or failed)")
+        return
+    if re.search(r"\b(error|not found|404|can.t be reached)\b", page.get("title") or "", re.IGNORECASE):
         print(f"[sites] not learning {domain}: looks like an error page ({page.get('title')!r})")
         return
     if domain not in _learning and site_memory.needs_learning(domain):

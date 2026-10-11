@@ -166,7 +166,7 @@ function connectWs() {
         return;
       }
       // Form questions are always read aloud, so the user can answer without looking
-      speak(msg.question + (msg.yes_no ? " Say yes or no." : ""), true);
+      speak(msg.question, true);
       return;
     }
 
@@ -305,7 +305,7 @@ function speak(text, force = false) {
   if (!(force || speakToggle.checked) || !text || !window.speechSynthesis) return;
   speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 1.05;
+  utterance.rate = 1.3; // brisk but clear — questions are read on every form page
   speechSynthesis.speak(utterance);
 }
 
