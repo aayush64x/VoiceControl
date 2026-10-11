@@ -11,6 +11,7 @@ import json
 import os
 import re
 import time
+from urllib.parse import quote_plus, urlparse
 
 from dotenv import load_dotenv
 from strands import Agent, tool
@@ -63,8 +64,70 @@ _TAB_SHORTCUTS = {
 }
 
 
+# Search result pages we can open directly — one navigation instead of
+# read page → type → click → verify through the model.
+_SEARCH_URLS = {
+    "google": "https://www.google.com/search?q={}",
+    "youtube": "https://www.youtube.com/results?search_query={}",
+    "amazon": "https://www.amazon.com/s?k={}",
+    "wikipedia": "https://en.wikipedia.org/w/index.php?search={}",
+    "reddit": "https://www.reddit.com/search/?q={}",
+    "chatgpt": "https://chatgpt.com/?q={}",
+}
+
+_SITE_NAMES = r"(youtube|google|amazon|wikipedia|reddit|chatgpt|chat gpt)"
+
+_SITE_HOSTS = {
+    "youtube.com": "youtube",
+    "google.com": "google",
+    "amazon.com": "amazon",
+    "wikipedia.org": "wikipedia",
+    "reddit.com": "reddit",
+    "chatgpt.com": "chatgpt",
+}
+
+
+def _search_url(site, query):
+    site = site.lower().replace(" ", "")
+    return _SEARCH_URLS[site].format(quote_plus(query.strip()))
+
+
+def _current_site():
+    """Site key for the page the user is on, if it's one we have a search URL for."""
+    url = (server.last_page or {}).get("url") or ""
+    host = urlparse(url).hostname or ""
+    for domain, site in _SITE_HOSTS.items():
+        if host == domain or host.endswith("." + domain):
+            return site
+    return None
+
+
+def _try_search(text):
+    """Turn "search X on youtube", "ask chatgpt X", "search for X" into a URL."""
+    m = re.match(r"^(?:ask|tell)\s+(?:chatgpt|chat gpt)\s+(?:to\s+)?(.+)$", text, re.IGNORECASE)
+    if m:
+        return _search_url("chatgpt", m.group(1))
+    m = re.match(rf"^(?:search|look up|find|play)\s+(?:for\s+)?(.+?)\s+on\s+{_SITE_NAMES}$", text, re.IGNORECASE)
+    if m:
+        return _search_url(m.group(2), m.group(1))
+    m = re.match(rf"^(?:search|look up)\s+{_SITE_NAMES}\s+for\s+(.+)$", text, re.IGNORECASE)
+    if m:
+        return _search_url(m.group(1), m.group(2))
+    m = re.match(r"^(?:search|look up)\s+(?:for\s+)?(.+)$", text, re.IGNORECASE)
+    if m:
+        # Only shortcut on sites we know; elsewhere let the agent use the page's own search box
+        site = _current_site()
+        if site:
+            return _search_url(site, m.group(1))
+    return None
+
+
 def try_direct(text):
-    stripped = text.strip()
+    stripped = text.strip().rstrip(".!")
+
+    url = _try_search(stripped)
+    if url:
+        return ("open", None, url)
 
     # "new tab" commands
     m = re.match(r"^new\s+tab(?:\s+(.+))?$", stripped, re.IGNORECASE)
@@ -126,25 +189,28 @@ def read_page() -> str:
     """
     result = _bridge(server.list_elements())
     if not result or "error" in result:
-        if server.last_page and server.last_page.get("elements"):
-            return _format_page(server.last_page)
+        # Report the failure rather than an old snapshot — acting on stale
+        # element numbers clicks the wrong things.
         err = result.get("error", "unknown") if result else "no response"
         return f"Error reading page: {err}"
     return _format_page(result)
 
 
 @tool
-def act(action: str, element: int = 0, value: str = "") -> str:
+def act(action: str, element: int = 0, value: str = "", submit: bool = False) -> str:
     """Perform one action on the page.
 
     Args:
         action: click, type, select, scroll, back, open, read, press_key
         element: Element number from read_page (required for click/type/select)
         value: Text to type, option to select, scroll direction, URL to open, or key name
+        submit: With "type" only — also submit after typing (press Enter / click Send).
+            Use for search boxes and chat boxes so it takes one step instead of two.
 
     Examples:
         act("click", 7)                            — click element 7
         act("type", 12, "Kansas City")              — type into field 12
+        act("type", 3, "cat videos", True)          — type into search box 3 and submit
         act("select", 5, "Missouri")                — choose dropdown option
         act("scroll", 0, "down")                    — scroll page down
         act("back")                                 — go back
@@ -152,7 +218,7 @@ def act(action: str, element: int = 0, value: str = "") -> str:
     """
     elem = element if element > 0 else None
     val = value if value else None
-    result = _bridge(server.do_action(action, element=elem, value=val))
+    result = _bridge(server.do_action(action, element=elem, value=val, submit=submit))
 
     if not result:
         return "Error: no response from browser."
@@ -164,6 +230,10 @@ def act(action: str, element: int = 0, value: str = "") -> str:
         parts.append(f"on '{result['label']}'")
     if result.get("navigated"):
         parts.append("— page navigated, call read_page to see the new page")
+    if result.get("submitted"):
+        parts.append("and submitted" + (" (clicked Send)" if result.get("sentWith") else ""))
+    if result.get("warning"):
+        parts.append(f"— WARNING: {result['warning']}")
     if result.get("verified") is False:
         parts.append("— WARNING: value may not have been set correctly, verify with read_page")
     return " ".join(parts)
@@ -234,7 +304,9 @@ def ask_user(question: str, yes_no: bool = False) -> str:
         question: The question to ask the user
         yes_no: If True, the user sees Yes/No buttons instead of a text input
     """
-    result = _bridge(server.ask_user(question, yes_no), timeout=120)
+    result = _bridge(server.ask_user(question, yes_no), timeout=125)
+    if result and result.get("cancelled"):
+        return "The user gave a new command instead of answering. Stop this task now and take no further actions."
     if not result or "error" in result:
         err = result.get("error", "no response") if result else "no response"
         return f"Error asking user: {err}"
@@ -250,7 +322,7 @@ You are a browser controller. You convert user commands into browser actions. \
 You NEVER answer from your own knowledge. You ONLY use tools.
 
 Workflow:
-1. Look at the current page (included with the request, or call read_page)
+1. read_page to see the current page
 2. Act on elements by number
 3. read_page again after navigation or when verifying results
 
@@ -261,18 +333,25 @@ Efficiency rules:
 - Maximum 15 tool calls per task. If not done by then, report progress and stop.
 
 Action rules:
-- If the request includes a page snapshot, use it for your first action. Otherwise call read_page first.
+- ALWAYS read_page before your first action.
 - After any navigation, call read_page — old element numbers are no longer valid.
-- Use element numbers from the LATEST page listing only.
-- For searching on Google: act("open", 0, "https://www.google.com/search?q=YOUR+QUERY")
-- For searching on YouTube: act("open", 0, "https://www.youtube.com/results?search_query=YOUR+QUERY")
-- For searching on Wikipedia: act("open", 0, "https://en.wikipedia.org/wiki/TOPIC")
-- For searching on Amazon: act("open", 0, "https://www.amazon.com/s?k=YOUR+QUERY")
-- NEVER try to type into search boxes on Google, YouTube, ChatGPT, or other complex sites. Use URL navigation instead.
-- For simple HTML pages and forms, type/click normally.
-- If act("open", url) fails, go to google.com and search for it via URL.
+- Use element numbers from the LATEST read_page only.
+- If the command is just a topic or phrase (e.g. "Dark Souls 3"), search for it: on the \
+current site if it has search (YouTube, Amazon, Wikipedia), otherwise on Google. Do not ask what to do.
+- Fastest way to search these sites — open the results URL directly (one step):
+  Google: https://www.google.com/search?q=QUERY
+  YouTube: https://www.youtube.com/results?search_query=QUERY
+  Wikipedia: https://en.wikipedia.org/w/index.php?search=QUERY
+  Amazon: https://www.amazon.com/s?k=QUERY
+  ChatGPT (sends the question): https://chatgpt.com/?q=QUESTION
+- On any other site, type into its search box with submit: act("type", N, "query", True). \
+This types AND submits in one step — never type then click separately.
+- To send a message in a chat box (ChatGPT, etc.), use act("type", N, "message", True). \
+Chat boxes may show as [field] with a label like "Ask anything" or "text box".
+- If act("open", url) fails, go to Google via its search URL.
 
 Self-correction rules:
+- After a search or sending a message, ONE read_page to confirm, then stop. Do not re-search.
 - After filling a form or clicking a button, read_page again to verify it worked.
 - If a field shows an error message or validation failure, read the error, fix the value, and retry.
 - If a click did not navigate or change the page, try a different approach.
@@ -292,6 +371,8 @@ Form filling rules:
 Output rules:
 - NEVER answer from your own knowledge. You are not a chatbot.
 - NEVER give advice, lists, or information the user didn't ask for.
+- NEVER reply with a menu of options or ask what the user meant in plain text. Act on your best guess; \
+only use ask_user when you truly cannot continue (e.g. missing form data).
 - Report ONLY what you did: "Opened usa.gov. Clicked Benefits. Found 3 results."
 - If you cannot complete the task, say what you tried and stop.
 """
@@ -363,24 +444,35 @@ async def _run_direct(text):
             return f"Opened new tab: {value}"
         return f"Error: {result}"
     result = await server.do_action(action, element=element, value=value)
+    if result and result.get("success") and action == "open":
+        return f"Opened {value}"
     if result and result.get("success"):
         return f"OK: {json.dumps(result)}"
     return f"Error: {result}"
 
 
+_running_agent = None
+
+
+def cancel_current():
+    """Stop the agent task that is running now, if any. Safe from any thread."""
+    if _running_agent is not None:
+        _running_agent.cancel()
+
+
 def _run_agent(text, tier):
+    global _running_agent
     agent = _get_agent(tier)
     # Each command starts fresh: old page listings would bloat every request and
     # confuse element numbers. Saved user details live in memory, not history.
     agent.messages.clear()
-    prompt = text
-    if server.last_page and server.last_page.get("elements"):
-        page_context = _format_page(server.last_page)
-        prompt = (
-            f"{text}\n\n[Snapshot of the current page — use it for your first action; "
-            f"call read_page after navigating or if an element number fails]\n{page_context}"
-        )
-    response = agent(prompt)
+    _running_agent = agent
+    try:
+        response = agent(text)
+    finally:
+        _running_agent = None
+    if getattr(response, "stop_reason", None) == "cancelled":
+        return "Stopped — running your new command."
     return str(response)
 
 
@@ -437,6 +529,7 @@ async def main():
     global _server_loop
     _server_loop = asyncio.get_running_loop()
     server.on_user_input = process_input
+    server.on_cancel = cancel_current
 
     import websockets as _ws
 

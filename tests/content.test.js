@@ -530,3 +530,156 @@ describe("setNativeValue (fix 4)", () => {
     expect(ta.value).toBe("world");
   });
 });
+
+describe("rich text boxes (ChatGPT-style contenteditable)", () => {
+  const { isRichTextBox, typeIntoRichText, pressEnter, findSendButton } = content;
+
+  function makeEditor(placeholder) {
+    const form = document.createElement("form");
+    const editor = document.createElement("div");
+    editor.setAttribute("contenteditable", "true");
+    editor.id = "prompt-textarea";
+    if (placeholder) {
+      const p = document.createElement("p");
+      p.setAttribute("data-placeholder", placeholder);
+      editor.appendChild(p);
+    }
+    const send = document.createElement("button");
+    send.setAttribute("aria-label", "Send prompt");
+    send.type = "button";
+    form.append(editor, send);
+    document.body.appendChild(form);
+    makeVisible(editor);
+    makeVisible(send);
+    return { form, editor, send };
+  }
+
+  test("contenteditable and role=textbox are rich text boxes; inputs are not", () => {
+    const { editor } = makeEditor();
+    const tb = document.createElement("div");
+    tb.setAttribute("role", "textbox");
+    const off = document.createElement("div");
+    off.setAttribute("contenteditable", "false");
+    expect(isRichTextBox(editor)).toBe(true);
+    expect(isRichTextBox(tb)).toBe(true);
+    expect(isRichTextBox(off)).toBe(false);
+    expect(isRichTextBox(document.createElement("input"))).toBe(false);
+  });
+
+  test("listed as a field with its placeholder label", () => {
+    makeEditor("Ask anything");
+    const elements = listElements();
+    const field = elements.find((e) => e.type === "field");
+    expect(field).toBeDefined();
+    expect(field.label).toBe("Ask anything");
+  });
+
+  test("children inside the editor are not listed separately", () => {
+    const { editor } = makeEditor();
+    const link = document.createElement("a");
+    link.href = "https://example.com";
+    link.textContent = "inner link";
+    editor.appendChild(link);
+    makeVisible(link);
+    const types = listElements().map((e) => e.type);
+    // Just the editor and the Send button — not the link inside the editor
+    expect(types.sort()).toEqual(["button", "field"]);
+  });
+
+  test("contenteditable=false is not listed as a field", () => {
+    const off = document.createElement("div");
+    off.setAttribute("contenteditable", "false");
+    off.textContent = "read only";
+    document.body.appendChild(off);
+    makeVisible(off);
+    expect(listElements().map((e) => e.label)).not.toContain("read only");
+  });
+
+  test("typeIntoRichText replaces content and fires input", () => {
+    const { editor } = makeEditor();
+    editor.textContent = "old text";
+    const onInput = jest.fn();
+    editor.addEventListener("input", onInput);
+    expect(typeIntoRichText(editor, "what is the biggest animal")).toBe(true);
+    expect(editor.textContent).toBe("what is the biggest animal");
+    expect(onInput).toHaveBeenCalled();
+  });
+
+  test("doAction type works on a rich text box", () => {
+    makeEditor();
+    const num = listElements().find((e) => e.type === "field").num;
+    const result = doAction("type", num, "hello");
+    expect(result.success).toBe(true);
+    expect(result.verified).toBe(true);
+  });
+
+  test("doAction type with submit presses Enter in the editor", () => {
+    const { editor } = makeEditor();
+    const keys = [];
+    editor.addEventListener("keydown", (e) => keys.push(e.key));
+    const num = listElements().find((e) => e.type === "field").num;
+    const result = doAction("type", num, "hello", true);
+    expect(result.submitted).toBe(true);
+    expect(keys).toEqual(["Enter"]);
+  });
+
+  test("pressEnter reports whether the page handled it", () => {
+    const { editor } = makeEditor();
+    expect(pressEnter(editor)).toBe(false);
+    editor.addEventListener("keydown", (e) => e.preventDefault());
+    expect(pressEnter(editor)).toBe(true);
+  });
+
+  test("findSendButton finds the nearby Send button, skipping disabled ones", () => {
+    const { editor, send } = makeEditor();
+    expect(findSendButton(editor)).toBe(send);
+    send.disabled = true;
+    expect(findSendButton(editor)).toBe(null);
+  });
+});
+
+describe("type with submit on normal inputs", () => {
+  test("submits the input's form when the page doesn't handle Enter", () => {
+    const form = document.createElement("form");
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "Search";
+    form.appendChild(input);
+    document.body.appendChild(form);
+    makeVisible(input);
+    form.requestSubmit = jest.fn();
+    const num = listElements().find((e) => e.label === "Search").num;
+    const result = doAction("type", num, "cat videos", true);
+    expect(input.value).toBe("cat videos");
+    expect(form.requestSubmit).toHaveBeenCalled();
+    expect(result.navigated).toBe(true);
+  });
+
+  test("does not double-submit when the page's own Enter handler took it", () => {
+    const form = document.createElement("form");
+    const input = document.createElement("input");
+    input.placeholder = "Search";
+    form.appendChild(input);
+    document.body.appendChild(form);
+    makeVisible(input);
+    input.addEventListener("keydown", (e) => e.preventDefault());
+    form.requestSubmit = jest.fn();
+    const num = listElements().find((e) => e.label === "Search").num;
+    doAction("type", num, "cat videos", true);
+    expect(form.requestSubmit).not.toHaveBeenCalled();
+  });
+
+  test("type without submit does not submit", () => {
+    const form = document.createElement("form");
+    const input = document.createElement("input");
+    input.placeholder = "Name";
+    form.appendChild(input);
+    document.body.appendChild(form);
+    makeVisible(input);
+    form.requestSubmit = jest.fn();
+    const num = listElements().find((e) => e.label === "Name").num;
+    const result = doAction("type", num, "Jordan");
+    expect(form.requestSubmit).not.toHaveBeenCalled();
+    expect(result.submitted).toBeUndefined();
+  });
+});

@@ -42,7 +42,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === "page_ready") {
-    chrome.runtime.sendMessage(message).catch(() => {});
-  }
+  // page_ready from content scripts reaches the side panel directly, so it is
+  // not re-forwarded here (that made every page report twice).
 });

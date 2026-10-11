@@ -83,8 +83,19 @@ function connectWs() {
     }
 
     if (msg.type === "agent_thinking") {
-      cmdResult.textContent = "Agent is thinking...";
+      cmdResult.textContent = msg.text ? "Working on: " + msg.text : "Agent is thinking...";
       cmdResult.className = "";
+      return;
+    }
+
+    if (msg.type === "queued") {
+      const ahead = msg.ahead === 1 ? "1 command" : msg.ahead + " commands";
+      cmdResult.textContent += "\n\nQueued: " + msg.text + " (after " + ahead + ")";
+      return;
+    }
+
+    if (msg.type === "question_cancelled") {
+      if (closeQuestion) closeQuestion();
       return;
     }
 
@@ -319,6 +330,9 @@ function renderElements(response) {
 }
 
 // --- Ask-user UI ---
+// Set while a question is on screen, so a new command can dismiss it
+let closeQuestion = null;
+
 function showQuestion(question, yesNo, callback) {
   const container = document.getElementById("ask-container");
   const questionEl = document.getElementById("ask-question");
@@ -352,7 +366,9 @@ function showQuestion(question, yesNo, callback) {
     noBtn.onclick = null;
     sendBtn.onclick = null;
     inputEl.onkeydown = null;
+    closeQuestion = null;
   }
+  closeQuestion = cleanup;
 
   yesBtn.onclick = () => { cleanup(); callback("Yes"); };
   noBtn.onclick = () => { cleanup(); callback("No"); };

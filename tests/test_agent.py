@@ -146,3 +146,56 @@ class TestUserDetailsFile:
             details = json.load(f)
         assert details["first_name"] == "Jordan"
         assert details["last_name"] == "Rivera"
+
+
+class TestSearchShortcuts:
+    """Searches on known sites open the results URL directly — no model call."""
+
+    def setup_method(self):
+        import server
+        self.server = server
+        server.last_page = None
+
+    def test_search_on_youtube(self):
+        assert try_direct("search cat videos on youtube") == (
+            "open", None, "https://www.youtube.com/results?search_query=cat+videos")
+
+    def test_search_for_on_google(self):
+        assert try_direct("search for weather in Kansas City on Google") == (
+            "open", None, "https://www.google.com/search?q=weather+in+Kansas+City")
+
+    def test_play_on_youtube(self):
+        assert try_direct("play dark souls 3 on youtube")[2].endswith("search_query=dark+souls+3")
+
+    def test_search_site_for(self):
+        assert try_direct("search amazon for wheelchair cushion") == (
+            "open", None, "https://www.amazon.com/s?k=wheelchair+cushion")
+
+    def test_ask_chatgpt(self):
+        assert try_direct("ask ChatGPT what is the biggest animal?") == (
+            "open", None, "https://chatgpt.com/?q=what+is+the+biggest+animal%3F")
+
+    def test_ask_chat_gpt_two_words(self):
+        assert try_direct("ask chat gpt to write a poem")[2] == "https://chatgpt.com/?q=write+a+poem"
+
+    def test_trailing_period_from_voice(self):
+        assert try_direct("search cats on youtube.")[2].endswith("search_query=cats")
+
+    def test_bare_search_uses_current_site(self):
+        self.server.last_page = {"url": "https://www.youtube.com/watch?v=abc"}
+        assert try_direct("search for dark souls 3")[2] == (
+            "https://www.youtube.com/results?search_query=dark+souls+3")
+
+    def test_bare_search_on_unknown_site_goes_to_agent(self):
+        self.server.last_page = {"url": "https://www.weather.gov/"}
+        assert try_direct("search for weather in Kansas City") is None
+        assert classify("search for weather in Kansas City") == "sonnet"
+
+    def test_bare_search_no_page_goes_to_agent(self):
+        assert try_direct("search for weather in Kansas City") is None
+
+    def test_find_on_this_page_not_a_shortcut(self):
+        assert try_direct("find the login button on this page") is None
+
+    def test_search_shortcut_classified_direct(self):
+        assert classify("search cat videos on youtube") == "direct"

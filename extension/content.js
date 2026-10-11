@@ -27,6 +27,13 @@ function getLabel(el) {
   if (el.getAttribute("aria-label")) return el.getAttribute("aria-label");
   if (el.title) return el.title;
   if (el.placeholder) return el.placeholder;
+  if (isRichTextBox(el)) {
+    // ChatGPT/ProseMirror keep the placeholder on an attribute or an inner <p>
+    const ph = el.getAttribute("aria-placeholder") || el.getAttribute("data-placeholder")
+      || el.querySelector("[data-placeholder]")?.getAttribute("data-placeholder");
+    if (ph) return ph;
+    if (!textOf(el).trim()) return "text box";
+  }
 
   if (el.id) {
     const label = document.querySelector(`label[for="${el.id}"]`);
@@ -41,8 +48,21 @@ function getLabel(el) {
 }
 
 // --- Element type ---
+// Visible text of an element (innerText where supported, e.g. not in jsdom)
+function textOf(el) {
+  return el.innerText !== undefined ? el.innerText : el.textContent;
+}
+
+// Rich text editors (ChatGPT, Gmail, Slack, Notion) are contenteditable divs, not inputs
+function isRichTextBox(el) {
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return false;
+  const ce = el.getAttribute("contenteditable");
+  return (ce !== null && ce !== "false") || el.getAttribute("role") === "textbox";
+}
+
 function getElementType(el) {
   const tag = el.tagName;
+  if (isRichTextBox(el)) return "field";
   if (tag === "A") return "link";
   if (tag === "BUTTON" || (tag === "INPUT" && el.type === "submit")) return "button";
   if (tag === "INPUT") return el.type === "checkbox" ? "checkbox" : el.type === "radio" ? "radio" : "field";
@@ -60,13 +80,15 @@ function listElements() {
   const newMap = {};
   const results = [];
 
-  const selectors = "a, button, input, textarea, select, [role='button'], [role='link'], [tabindex]";
+  const selectors = "a, button, input, textarea, select, [role='button'], [role='link'], [tabindex], [contenteditable]:not([contenteditable='false']), [role='textbox']";
   const elements = document.querySelectorAll(selectors);
 
   for (const el of elements) {
     if (!isVisible(el)) continue;
     if (el.tagName === "INPUT" && el.type === "hidden") continue;
     if (el.closest("[aria-hidden='true']")) continue;
+    // Skip elements inside an editor — only the editor itself is a target
+    if (el.parentElement && el.parentElement.closest("[contenteditable]:not([contenteditable='false'])")) continue;
 
     let num = el.dataset.agentNum ? parseInt(el.dataset.agentNum) : null;
     if (num && oldMap[num] === el) {
@@ -84,6 +106,9 @@ function listElements() {
     let value = "";
     if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
       value = el.value ? ` [value: "${el.value}"]` : "";
+    } else if (isRichTextBox(el)) {
+      const text = textOf(el).trim();
+      value = text ? ` [value: "${text.substring(0, 60)}"]` : "";
     }
     if (el.tagName === "SELECT") {
       const opts = Array.from(el.options).filter((o) => o.value).map((o) => o.text);
@@ -197,8 +222,63 @@ function setNativeValue(el, value) {
   }
 }
 
+// --- Rich text editors (contenteditable) ---
+function typeIntoRichText(el, value) {
+  el.focus();
+  // Select existing content so typing replaces it
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  // insertText goes through the editor's own input handling (ProseMirror,
+  // Lexical, Draft.js), so the app's state updates like a real paste.
+  let inserted = false;
+  try {
+    inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, value);
+  } catch (e) {
+    inserted = false;
+  }
+  if (!inserted || !textOf(el).includes(value)) {
+    el.textContent = value;
+    el.dispatchEvent(new InputEvent("input", { data: value, bubbles: true, inputType: "insertText" }));
+  }
+  return textOf(el).trim() === value.trim();
+}
+
+// Returns true if the page's key handler took the Enter (called preventDefault)
+function pressEnter(el) {
+  const opts = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
+  const down = new KeyboardEvent("keydown", opts);
+  el.dispatchEvent(down);
+  el.dispatchEvent(new KeyboardEvent("keypress", opts));
+  el.dispatchEvent(new KeyboardEvent("keyup", opts));
+  return down.defaultPrevented;
+}
+
+const SEND_BUTTON_SELECTOR = [
+  "button[data-testid='send-button']",
+  "button[aria-label*='send' i]",
+  "button[aria-label*='submit' i]",
+  "button[aria-label*='search' i]",
+  "button[type='submit']",
+].join(", ");
+
+// Find the send/submit button that belongs to a text box (nearest ancestor that has one)
+function findSendButton(el) {
+  let node = el.parentElement;
+  for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
+    const buttons = node.querySelectorAll(SEND_BUTTON_SELECTOR);
+    for (const btn of buttons) {
+      if (!btn.disabled && isVisible(btn)) return btn;
+    }
+  }
+  return null;
+}
+
 // --- Fix 2: Every action reports back clearly ---
-function doAction(action, element, value) {
+function doAction(action, element, value, submit = false) {
   if (action === "scroll") {
     const dir = value || "down";
     const amount = dir === "up" ? -400 : 400;
@@ -245,6 +325,15 @@ function doAction(action, element, value) {
   }
 
   if (action === "type") {
+    if (isRichTextBox(el)) {
+      const verified = typeIntoRichText(el, value);
+      const result = { success: true, action: "type", element, value, verified };
+      if (submit) {
+        pressEnter(el);
+        result.submitted = true;
+      }
+      return result;
+    }
     if (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA") {
       return { success: false, error: `Element ${element} (${getLabel(el)}) is not a text field.` };
     }
@@ -254,7 +343,19 @@ function doAction(action, element, value) {
     el.dispatchEvent(new InputEvent("input", { data: value, bubbles: true, inputType: "insertText" }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     const verified = el.value === value;
-    return { success: true, action: "type", element, value, verified };
+    const result = { success: true, action: "type", element, value, verified };
+    if (submit) {
+      const handled = pressEnter(el);
+      // Code-generated Enter doesn't submit forms on its own, so submit the form
+      // unless the page's own key handler already took care of it.
+      if (!handled && el.form && el.tagName === "INPUT") {
+        if (el.form.requestSubmit) el.form.requestSubmit();
+        else el.form.submit();
+        result.navigated = true;
+      }
+      result.submitted = true;
+    }
+    return result;
   }
 
   if (action === "select") {
@@ -314,7 +415,28 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage 
       return true;
     }
     if (message.type === "action") {
-      const result = doAction(message.action, message.element, message.value);
+      const result = doAction(message.action, message.element, message.value, message.submit);
+      const el = elementMap[message.element];
+      if (result.submitted && el && isRichTextBox(el)) {
+        // Chat apps send on Enter. If the text is still sitting in the box
+        // shortly after, Enter was ignored, so click the Send button instead.
+        setTimeout(() => {
+          if (el.isConnected && textOf(el).trim() && textOf(el).includes(message.value)) {
+            const btn = findSendButton(el);
+            if (btn) {
+              btn.click();
+              result.sentWith = "send button";
+            } else {
+              result.warning = "Text typed but could not find a Send button. Use read_page to find it.";
+            }
+          }
+          const updated = listElements();
+          showOverlays();
+          result.updatedElements = updated.length;
+          sendResponse(result);
+        }, 400);
+        return true;
+      }
       const skipRescan = !result.success
         || message.action === "read"
         || message.action === "scroll"
@@ -345,5 +467,5 @@ function resetForTest() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isVisible, getLabel, getElementType, listElements, doAction, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
+  module.exports = { isVisible, getLabel, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
 }

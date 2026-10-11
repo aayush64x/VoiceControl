@@ -21,7 +21,11 @@ def reset_server_state():
     server.last_page = None
     server.on_user_input = None
     server._transcriber = None
-    server._processing = False
+    server.on_cancel = None
+    server._command_queue = None
+    server._worker_task = None
+    server._busy = False
+    server._question_rid = None
     yield
 
 
@@ -238,15 +242,21 @@ async def test_user_said_no_agent():
 
 
 @pytest.mark.asyncio
-async def test_user_said_while_busy_is_rejected():
-    """A second command sent while one is running gets 'still processing', not run in parallel."""
+async def test_user_said_while_busy_is_queued():
+    """A command sent while one is running waits, then runs — never in parallel, never dropped."""
     async with websockets.serve(server.handler, "localhost", 0) as ws_server:
         port = ws_server.sockets[0].getsockname()[1]
         order = []
+        running = 0
+        max_running = 0
 
         async def tracking_agent(text):
+            nonlocal running, max_running
+            running += 1
+            max_running = max(max_running, running)
             order.append(text)
             await asyncio.sleep(0.05)
+            running -= 1
             return f"Done: {text}"
 
         server.on_user_input = tracking_agent
@@ -257,20 +267,71 @@ async def test_user_said_while_busy_is_rejected():
             await ws.send(json.dumps({"type": "user_said", "text": "second"}))
 
             messages = []
-            for _ in range(3):
-                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
-                messages.append(msg)
+            while len([m for m in messages if m["type"] == "agent_response"]) < 2:
+                messages.append(json.loads(await asyncio.wait_for(ws.recv(), timeout=2)))
 
-            assert order == ["first"]
+            assert order == ["first", "second"]
+            assert max_running == 1
+            queued = [m for m in messages if m["type"] == "queued"]
+            assert queued == [{"type": "queued", "text": "second", "ahead": 1}]
             responses = [m["text"] for m in messages if m["type"] == "agent_response"]
-            assert "Still processing previous command..." in responses
-            assert "Done: first" in responses
+            assert responses == ["Done: first", "Done: second"]
 
-            # Once the first finishes, a new command is accepted
-            await ws.send(json.dumps({"type": "user_said", "text": "third"}))
-            for _ in range(2):
+
+@pytest.mark.asyncio
+async def test_new_command_cancels_open_question():
+    """Giving a new command while a question is on screen dismisses it and cancels the task."""
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        answers = []
+        cancelled = []
+
+        async def asking_agent(text):
+            if text == "first":
+                answers.append(await server.ask_user("Which one?"))
+                return "first ended"
+            return f"Done: {text}"
+
+        server.on_user_input = asking_agent
+        server.on_cancel = lambda: cancelled.append(True)
+
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps({"type": "user_said", "text": "first"}))
+            while True:
                 msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
-            assert msg == {"type": "agent_response", "text": "Done: third"}
+                if msg["type"] == "ask_user":
+                    break
+
+            await ws.send(json.dumps({"type": "user_said", "text": "second"}))
+            messages = []
+            while len([m for m in messages if m["type"] == "agent_response"]) < 2:
+                messages.append(json.loads(await asyncio.wait_for(ws.recv(), timeout=2)))
+
+            assert answers == [{"cancelled": True}]
+            assert cancelled == [True]
+            assert {"type": "question_cancelled"} in messages
+            responses = [m["text"] for m in messages if m["type"] == "agent_response"]
+            assert responses == ["first ended", "Done: second"]
+
+
+@pytest.mark.asyncio
+async def test_old_connection_closing_keeps_new_client():
+    """Reopening the side panel: the old socket closing must not disconnect the new one."""
+    async with websockets.serve(server.handler, "localhost", 0) as ws_server:
+        port = ws_server.sockets[0].getsockname()[1]
+        old = await websockets.connect(f"ws://localhost:{port}")
+        await asyncio.sleep(0.05)
+        async with websockets.connect(f"ws://localhost:{port}") as new:
+            await asyncio.sleep(0.05)
+            await old.close()
+            await asyncio.sleep(0.05)
+            assert server.client is not None
+
+            task = asyncio.create_task(server.list_elements())
+            msg = json.loads(await asyncio.wait_for(new.recv(), timeout=2))
+            await new.send(json.dumps({"id": msg["id"], "result": {"elements": [], "count": 0}}))
+            assert await task == {"elements": [], "count": 0}
 
 
 @pytest.mark.asyncio
