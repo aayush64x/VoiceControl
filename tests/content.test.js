@@ -1150,28 +1150,46 @@ describe("number tags on/off", () => {
   });
 });
 
-describe("F2 toggles listening from any page", () => {
-  const { onToggleKey } = content;
-  const key = (k, extra = {}) => new KeyboardEvent("keydown", { key: k, cancelable: true, ...extra });
+describe("double-tap Control toggles listening", () => {
+  const { createDoubleTap } = content;
+  const ev = (key, extra = {}) => ({ key, repeat: false, altKey: false, metaKey: false, shiftKey: false, ...extra });
 
-  afterEach(() => { delete global.chrome; });
+  function setup() {
+    let t = 1000;
+    const fired = [];
+    const d = createDoubleTap(() => fired.push(t), () => t);
+    const tap = (gap = 0, extra = {}) => { t += gap; d.keydown(ev("Control", extra)); d.keyup(ev("Control")); };
+    return { d, fired, tap, advance: (ms) => { t += ms; } };
+  }
 
-  test("F2 tells the extension to toggle the mic", () => {
-    const sent = [];
-    global.chrome = { runtime: { sendMessage: (m) => { sent.push(m); return Promise.resolve(); } } };
-    const e = key("F2");
-    expect(onToggleKey(e)).toBe(true);
-    expect(e.defaultPrevented).toBe(true);
-    expect(sent).toEqual([{ type: "toggle_mic" }]);
+  test("two quick taps toggle; two more toggle again", () => {
+    const { fired, tap } = setup();
+    tap(); tap(200);
+    expect(fired.length).toBe(1);
+    tap(1000); tap(150);
+    expect(fired.length).toBe(2);
   });
 
-  test("other keys, held-down repeats and modifier combos are ignored", () => {
-    const sent = [];
-    global.chrome = { runtime: { sendMessage: (m) => { sent.push(m); return Promise.resolve(); } } };
-    expect(onToggleKey(key("F3"))).toBe(false);
-    expect(onToggleKey(key("F2", { repeat: true }))).toBe(false);
-    expect(onToggleKey(key("F2", { metaKey: true }))).toBe(false);
-    expect(onToggleKey(key("F2", { shiftKey: true }))).toBe(false);
-    expect(sent).toEqual([]);
+  test("taps too far apart don't count", () => {
+    const { fired, tap } = setup();
+    tap(); tap(600);
+    expect(fired.length).toBe(0);
+  });
+
+  test("Ctrl+C between taps doesn't count", () => {
+    const { d, fired, tap } = setup();
+    tap();
+    d.keydown(ev("Control")); d.keydown(ev("c")); d.keyup(ev("c")); d.keyup(ev("Control"));
+    tap(100);
+    expect(fired.length).toBe(0);
+  });
+
+  test("holding Control down (repeat) or with Shift doesn't count", () => {
+    const { d, fired, tap } = setup();
+    tap();
+    d.keydown(ev("Control", { repeat: true })); d.keyup(ev("Control"));
+    expect(fired.length).toBe(0);
+    tap(100, { shiftKey: true });
+    expect(fired.length).toBe(0);
   });
 });

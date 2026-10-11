@@ -131,12 +131,22 @@
     else startRecording();
   }
 
-  // F2 toggles listening while the panel has focus (on web pages, the page script handles it)
+  // Double-tap Control toggles listening while the panel has focus (on web
+  // pages, the page script does the same). Control must be tapped alone.
+  let lastCtrlTap = 0;
+  let ctrlClean = false;
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'F2' || e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
-    e.preventDefault();
-    toggleMic();
-  });
+    if (e.key === 'Control') ctrlClean = !e.repeat && !(e.altKey || e.metaKey || e.shiftKey);
+    else { ctrlClean = false; lastCtrlTap = 0; }
+  }, true);
+  document.addEventListener('keyup', (e) => {
+    if (e.key !== 'Control') return;
+    if (!ctrlClean) { lastCtrlTap = 0; return; }
+    ctrlClean = false;
+    const t = Date.now();
+    if (lastCtrlTap && t - lastCtrlTap <= 400) { lastCtrlTap = 0; toggleMic(); }
+    else lastCtrlTap = t;
+  }, true);
 
   P.on('mic', startRecording);
   P.on('stopListening', () => stopRecording(true));

@@ -243,13 +243,17 @@ describe("question options without semicolons", () => {
   });
 });
 
-describe("F2 in the panel", () => {
+describe("double-tap Control in the panel", () => {
   test("toggles listening on and off", () => {
     const { P, ws } = loadPanel();
     ws.open();
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", cancelable: true, bubbles: true }));
+    const tap = () => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Control", bubbles: true }));
+      document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "Control", bubbles: true }));
+    };
+    tap(); tap();
     expect(P.state).toBe("listening");
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", cancelable: true, bubbles: true }));
+    tap(); tap();
     expect(ws.sent).toContainEqual({ type: "voice_stop", cancel: false });
   });
 });

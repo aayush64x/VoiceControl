@@ -904,17 +904,42 @@ function sendToExtension(message) {
   }
 }
 
-// --- F2 toggles listening (Chrome won't allow a lone function key as an
-// extension shortcut, so the page script listens for it). On a Mac that's
-// Fn+F2 unless the top row is set to standard function keys.
-const TOGGLE_KEY = "F2";
+// --- Double-tap Control toggles listening ---
+// Chrome won't allow a lone key as an extension shortcut, so the page script
+// listens itself. Control must be tapped alone (Ctrl+C etc. never count),
+// twice within DOUBLE_TAP_MS.
+const DOUBLE_TAP_MS = 400;
 
-function onToggleKey(e) {
-  if (e.key !== TOGGLE_KEY || e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
-  e.preventDefault();
-  sendToExtension({ type: "toggle_mic" });
-  return true;
+function createDoubleTap(onDoubleTap, now = () => Date.now()) {
+  let lastTap = 0;
+  let clean = false; // Control is down and nothing else was pressed with it
+  return {
+    keydown(e) {
+      if (e.key === "Control") {
+        if (!e.repeat) clean = !(e.altKey || e.metaKey || e.shiftKey);
+        else clean = false; // held down, not a tap
+      } else {
+        clean = false;
+        lastTap = 0; // another key in between breaks the double tap
+      }
+    },
+    keyup(e) {
+      if (e.key !== "Control") return false;
+      if (!clean) { lastTap = 0; return false; }
+      clean = false;
+      const t = now();
+      if (lastTap && t - lastTap <= DOUBLE_TAP_MS) {
+        lastTap = 0;
+        onDoubleTap();
+        return true;
+      }
+      lastTap = t;
+      return false;
+    },
+  };
 }
+
+const toggleKey = createDoubleTap(() => sendToExtension({ type: "toggle_mic" }));
 
 // --- Fix 6: New page announces itself ---
 function announceReady() {
@@ -939,7 +964,8 @@ function announceReady() {
 // --- Message listener (guard against double injection) ---
 if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage && !window._voiceAgentLoaded) {
   window._voiceAgentLoaded = true;
-  window.addEventListener("keydown", onToggleKey, true);
+  window.addEventListener("keydown", (e) => toggleKey.keydown(e), true);
+  window.addEventListener("keyup", (e) => toggleKey.keyup(e), true);
 
   if (chrome.storage && chrome.storage.local) {
     chrome.storage.local.get("showOverlays", (stored) => {
@@ -1050,5 +1076,5 @@ function resetForTest() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { onToggleKey, setOverlaysEnabled, findSearchBox, findChatBox, findKeyElements, stableSelector, resolveKeyElement, typeAndSubmit, readMainText, waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
+  module.exports = { createDoubleTap, setOverlaysEnabled, findSearchBox, findChatBox, findKeyElements, stableSelector, resolveKeyElement, typeAndSubmit, readMainText, waitForSettle, linkWillNavigate, isVisible, getLabel, getGroupQuestion, getPageContext, isChoice, visibleTarget, getElementType, listElements, doAction, isRichTextBox, typeIntoRichText, pressEnter, findSendButton, clearOverlays, showOverlays, setNativeValue, resetForTest, get elementMap() { return elementMap; } };
 }

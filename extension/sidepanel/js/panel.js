@@ -21,7 +21,7 @@
   const STATES = {
     idle: {
       eyebrow: 'Ready', title: 'How can I help?',
-      sub: 'Tap the mic or press F2, then say what you need.', panel: 'idle',
+      sub: 'Tap the mic or press Control twice, then say what you need.', panel: 'idle',
     },
     listening: {
       eyebrow: 'Listening', title: 'Listening…',
