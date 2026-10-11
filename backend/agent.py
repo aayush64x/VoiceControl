@@ -52,16 +52,6 @@ _DIRECT_PATTERNS = [
     (r"^back$", lambda m: ("back", None, None)),
     (r"^open\s+(https?://\S+|[\w.-]+\.\w{2,})$", lambda m: ("open", None, m.group(1))),
     (r"^list$", lambda m: ("list", None, None)),
-    # Number tags on the page: "show numbers", "hide numbers", "overlay on/off", "turn numbers off"
-    (r"^(?:show|turn on|enable)\s+(?:the\s+)?(?:numbers?|number tags|overlays?)$", lambda m: ("overlays", None, "on")),
-    (r"^(?:hide|turn off|disable|remove)\s+(?:the\s+)?(?:numbers?|number tags|overlays?)$", lambda m: ("overlays", None, "off")),
-    (r"^(?:turn\s+)?(?:the\s+)?(?:numbers?|overlays?)\s+(on|off)$", lambda m: ("overlays", None, m.group(1).lower())),
-    # "settings <name> on|off" — one consistent form for the assistant's own settings.
-    # "setting"/"settings:" and an optional "turn" are accepted (speech drops colons).
-    (r"^settings?[:,]?\s+(?:turn\s+)?(?:the\s+)?(?:overlays?|numbers?|number tags)\s+(on|off)$",
-     lambda m: ("overlays", None, m.group(1).lower())),
-    (r"^settings?[:,]?\s+(?:turn\s+)?(?:speak|speech|voice replies|spoken replies|read aloud)\s+(on|off)$",
-     lambda m: ("speak", None, m.group(1).lower())),
 ]
 
 # Site commands: "search X", "play X on youtube", "ask chatgpt X".
@@ -127,8 +117,50 @@ def _parse_new_tab(text):
     return None
 
 
+# The assistant's own settings, matched by meaning rather than word order, so
+# "settings overlay on", "turn settings overlay on", "overlay settings on" and
+# "hide the numbers please" all work. Every word must be a topic word, an
+# on/off word, or filler — so "click number 5" is not a setting.
+_SETTING_TOPICS = {
+    "overlays": {"overlay", "overlays", "number", "numbers", "tags", "labels"},
+    "speak": {"speak", "speech", "spoken", "speaking", "voice", "replies", "reply", "aloud", "read"},
+}
+_ON_WORDS = {"on", "show", "enable"}
+_OFF_WORDS = {"off", "hide", "disable", "remove"}
+_SETTING_FILLER = {"settings", "setting", "turn", "the", "please", "switch", "toggle", "set",
+                   "to", "now", "me", "can", "you", "could", "page", "all", "my"}
+
+
+def _parse_setting(text):
+    """("overlays"|"speak", None, "on"|"off") for a settings command, else None."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    if not words or len(words) > 8:
+        return None
+    topic = state = None
+    for word in words:
+        if word in _ON_WORDS or word in _OFF_WORDS:
+            value = "on" if word in _ON_WORDS else "off"
+            if state and state != value:
+                return None  # "on ... off" — ambiguous
+            state = value
+            continue
+        found = next((t for t, names in _SETTING_TOPICS.items() if word in names), None)
+        if found:
+            if topic and topic != found:
+                return None  # two settings at once — let the user say them one by one
+            topic = found
+            continue
+        if word not in _SETTING_FILLER:
+            return None
+    return (topic, None, state) if topic and state else None
+
+
 def try_direct(text):
     stripped = text.strip().rstrip(".!")
+
+    setting = _parse_setting(stripped)
+    if setting:
+        return setting
 
     # New tab: instant for a blank tab, an address, or a site already learned.
     # Anything else (an unknown or misheard name) goes to the AI, which has
@@ -567,6 +599,9 @@ only use ask_user when you truly cannot continue (e.g. missing form data).
 E.g. "Kansas City: clear and 72 degrees, high of 90 tomorrow." or "Searched YouTube for cat videos."
 - If you cannot complete the task, say what you tried and stop.
 - NEVER claim something a tool didn't do (e.g. "opened in a new tab" after a normal open).
+- Requests about THIS assistant's own settings (number tags / overlay, speaking replies) are not \
+about the web page — don't touch the page. Reply only: Say "settings overlay on" or "settings overlay off" \
+(or "settings speak on/off").
 """
 
 _agents = {}

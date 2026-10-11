@@ -651,3 +651,23 @@ class TestSettingsCommands:
         assert asyncio.run(agent._run_direct("settings speak on")) == "Replies will be read aloud."
         assert asyncio.run(agent._run_direct("settings speak off")) == "Replies will only be read aloud when you ask."
         assert sent == [{"type": "set_speak", "on": True}, {"type": "set_speak", "on": False}]
+
+
+class TestSettingsAnyWordOrder:
+    """The phrasings that failed live: settings must match by meaning, not word order."""
+
+    def test_word_orders_that_failed(self):
+        assert try_direct("turn settings overlay on") == ("overlays", None, "on")
+        assert try_direct("overlay settings on") == ("overlays", None, "on")
+        assert try_direct("Turn on the overlay please.") == ("overlays", None, "on")
+        assert try_direct("show me the numbers") == ("overlays", None, "on")
+        assert try_direct("switch the numbers off") == ("overlays", None, "off")
+        assert try_direct("speech off") == ("speak", None, "off")
+        assert try_direct("turn on voice replies") == ("speak", None, "on")
+        assert try_direct("settings read aloud off") == ("speak", None, "off")
+
+    def test_not_settings(self):
+        for text in ["click number 5", "read it out loud", "turn on the lights in the kitchen",
+                     "show me cat videos", "overlay on off", "turn speech and overlay on",
+                     "scroll down", "open the settings page"]:
+            assert try_direct(text) in (None,) or try_direct(text)[0] not in ("overlays", "speak"), text
