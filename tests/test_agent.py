@@ -612,3 +612,42 @@ class TestOverlayCommands:
         assert asyncio.run(agent._run_direct("hide numbers")) == "Numbers hidden."
         assert asyncio.run(agent._run_direct("show numbers")) == "Numbers shown on the page."
         assert sent == [{"type": "set_overlays", "on": False}, {"type": "set_overlays", "on": True}]
+
+
+class TestSettingsCommands:
+    """'settings <name> on|off' — the assistant's own settings, by voice or typed."""
+
+    def test_settings_overlay(self):
+        for text, want in [("settings overlay on", "on"), ("Settings: overlay off", "off"),
+                           ("setting numbers on", "on"), ("settings, turn the overlay off.", "off"),
+                           ("settings number tags off", "off")]:
+            assert try_direct(text) == ("overlays", None, want), text
+
+    def test_settings_speak(self):
+        for text, want in [("settings speak on", "on"), ("Settings: speak off", "off"),
+                           ("settings speech on", "on"), ("settings turn voice replies off", "off"),
+                           ("settings read aloud on", "on")]:
+            assert try_direct(text) == ("speak", None, want), text
+
+    def test_short_forms_still_work(self):
+        assert try_direct("overlay on") == ("overlays", None, "on")
+        assert try_direct("hide numbers") == ("overlays", None, "off")
+
+    def test_not_settings(self):
+        assert try_direct("settings") is None
+        assert try_direct("open the settings page") is None
+        assert try_direct("settings speak loudly") is None
+
+    def test_speak_tells_the_panel(self, monkeypatch):
+        import asyncio
+        import agent
+        import server
+        sent = []
+
+        async def to_panel(msg):
+            sent.append(msg)
+
+        monkeypatch.setattr(server, "_send_to_client", to_panel)
+        assert asyncio.run(agent._run_direct("settings speak on")) == "Replies will be read aloud."
+        assert asyncio.run(agent._run_direct("settings speak off")) == "Replies will only be read aloud when you ask."
+        assert sent == [{"type": "set_speak", "on": True}, {"type": "set_speak", "on": False}]

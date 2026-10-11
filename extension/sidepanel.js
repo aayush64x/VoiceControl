@@ -113,6 +113,11 @@ function connectWs() {
       return;
     }
 
+    if (msg.type === "set_speak") {
+      setAlwaysSpeak(!!msg.on);
+      return;
+    }
+
     if (msg.type === "queued") {
       const ahead = msg.ahead === 1 ? "1 command" : msg.ahead + " commands";
       cmdResult.textContent += "\n\nQueued: " + msg.text + " (after " + ahead + ")";
@@ -272,10 +277,13 @@ const speakToggle = document.getElementById("speak-replies");
 try {
   speakToggle.checked = localStorage.getItem("speakReplies") === "on";
 } catch {}
-speakToggle.addEventListener("change", () => {
-  try { localStorage.setItem("speakReplies", speakToggle.checked ? "on" : "off"); } catch {}
-  if (!speakToggle.checked) stopSpeaking();
-});
+// "Always speak replies" — the checkbox, or "settings speak on/off"
+function setAlwaysSpeak(on) {
+  speakToggle.checked = on;
+  try { localStorage.setItem("speakReplies", on ? "on" : "off"); } catch {}
+  if (!on) stopSpeaking();
+}
+speakToggle.addEventListener("change", () => setAlwaysSpeak(speakToggle.checked));
 
 // force: the user asked for this reply to be read aloud
 function speak(text, force = false) {

@@ -56,6 +56,12 @@ _DIRECT_PATTERNS = [
     (r"^(?:show|turn on|enable)\s+(?:the\s+)?(?:numbers?|number tags|overlays?)$", lambda m: ("overlays", None, "on")),
     (r"^(?:hide|turn off|disable|remove)\s+(?:the\s+)?(?:numbers?|number tags|overlays?)$", lambda m: ("overlays", None, "off")),
     (r"^(?:turn\s+)?(?:the\s+)?(?:numbers?|overlays?)\s+(on|off)$", lambda m: ("overlays", None, m.group(1).lower())),
+    # "settings <name> on|off" — one consistent form for the assistant's own settings.
+    # "setting"/"settings:" and an optional "turn" are accepted (speech drops colons).
+    (r"^settings?[:,]?\s+(?:turn\s+)?(?:the\s+)?(?:overlays?|numbers?|number tags)\s+(on|off)$",
+     lambda m: ("overlays", None, m.group(1).lower())),
+    (r"^settings?[:,]?\s+(?:turn\s+)?(?:speak|speech|voice replies|spoken replies|read aloud)\s+(on|off)$",
+     lambda m: ("speak", None, m.group(1).lower())),
 ]
 
 # Site commands: "search X", "play X on youtube", "ask chatgpt X".
@@ -774,6 +780,10 @@ def classify(text):
 
 async def _run_direct(text):
     action, element, value = try_direct(text)
+    if action == "speak":
+        on = value == "on"
+        await server._send_to_client({"type": "set_speak", "on": on})
+        return "Replies will be read aloud." if on else "Replies will only be read aloud when you ask."
     if action == "overlays":
         on = value == "on"
         await server._send_to_client({"type": "set_overlays", "on": on})
