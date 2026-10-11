@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Voice Agent</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 16px;
+      min-width: 300px;
+    }
+    h1 {
+      font-size: 18px;
+      margin-bottom: 16px;
+      color: #ffffff;
+    }
+    #list-btn {
+      width: 100%;
+      padding: 12px;
+      font-size: 15px;
+      background: #ff6600;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #list-btn:hover { background: #e65c00; }
+    #list-btn:active { background: #cc5200; }
+    #status {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #aaa;
+    }
+    #elements {
+      margin-top: 16px;
+      font-size: 13px;
+      line-height: 1.6;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    .el-item {
+      padding: 4px 0;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    .el-num {
+      color: #ff6600;
+      font-weight: bold;
+      font-family: monospace;
+      margin-right: 6px;
+    }
+    .el-type {
+      color: #888;
+      font-size: 11px;
+      margin-left: 4px;
+    }
+    .el-value {
+      color: #6a9fff;
+      font-size: 11px;
+    }
+    #cmd-box {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    #cmd-input {
+      flex: 1;
+      padding: 10px;
+      font-size: 14px;
+      background: #2a2a4a;
+      color: #e0e0e0;
+      border: 1px solid #444;
+      border-radius: 6px;
+      outline: none;
+    }
+    #cmd-input:focus { border-color: #ff6600; }
+    #cmd-input::placeholder { color: #666; }
+    #cmd-send {
+      padding: 10px 16px;
+      font-size: 14px;
+      background: #ff6600;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #cmd-send:hover { background: #e65c00; }
+    #cmd-result {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #8f8;
+      font-family: monospace;
+      white-space: pre-wrap;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+    #cmd-result.error { color: #f88; }
+    .help-text {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.5;
+    }
+    #mic-section {
+      text-align: center;
+      margin: 16px 0;
+    }
+    #mic-btn {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: #2a2a4a;
+      border: 3px solid #ff6600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    #mic-btn:hover { background: #3a3a5a; }
+    #mic-btn.recording {
+      background: #ff6600;
+      animation: mic-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes mic-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,102,0,0.4); }
+      50% { box-shadow: 0 0 0 12px rgba(255,102,0,0); }
+    }
+    #mic-btn svg { fill: #ff6600; width: 28px; height: 28px; }
+    #mic-btn.recording svg { fill: white; }
+    #mic-status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #888;
+    }
+    #mic-status.listening { color: #ff6600; font-weight: 600; }
+    #transcript {
+      margin-top: 8px;
+      font-size: 14px;
+      color: #e0e0e0;
+      min-height: 20px;
+      font-style: italic;
+    }
+    #transcript .partial { color: #888; }
+    .divider {
+      margin: 12px 0;
+      border: none;
+      border-top: 1px solid #2a2a4a;
+      position: relative;
+      text-align: center;
+    }
+    .divider::after {
+      content: "or type";
+      position: relative;
+      top: -10px;
+      background: #1a1a2e;
+      padding: 0 10px;
+      font-size: 11px;
+      color: #555;
+    }
+    #ask-container {
+      display: none;
+      margin-top: 16px;
+      padding: 14px;
+      background: #2a2a4a;
+      border: 2px solid #ff6600;
+      border-radius: 10px;
+    }
+    #ask-container.ask-active {
+      animation: ask-pulse 1s ease-in-out 2;
+    }
+    @keyframes ask-pulse {
+      0%, 100% { border-color: #ff6600; }
+      50% { border-color: #ffaa00; }
+    }
+    #ask-question {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 10px;
+      line-height: 1.4;
+    }
+    #ask-input {
+      width: 100%;
+      padding: 10px;
+      font-size: 14px;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      border: 1px solid #444;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      outline: none;
+    }
+    #ask-input:focus { border-color: #ff6600; }
+    .ask-buttons {
+      display: flex;
+      gap: 8px;
+    }
+    .ask-btn {
+      flex: 1;
+      padding: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    #ask-yes {
+      background: #22aa44;
+      color: white;
+    }
+    #ask-yes:hover { background: #1d9038; }
+    #ask-no {
+      background: #cc3333;
+      color: white;
+    }
+    #ask-no:hover { background: #b02a2a; }
+    #ask-send {
+      background: #ff6600;
+      color: white;
+    }
+    #ask-send:hover { background: #e65c00; }
+  </style>
+</head>
+<body>
+  <h1>Voice Browser Agent</h1>
+  <div id="ws-status" style="font-size:11px;margin-bottom:10px;color:#f88;">Backend: disconnected</div>
+  <div id="mic-section">
+    <button id="mic-btn" title="Click to start/stop voice input">
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+      </svg>
+    </button>
+    <div id="mic-status">Click mic to speak</div>
+    <div id="transcript"></div>
+  </div>
+  <hr class="divider">
+  <button id="list-btn">List Elements</button>
+  <div id="cmd-box">
+    <input id="cmd-input" type="text" placeholder="click 7, type 3 hello, or ask anything">
+    <button id="cmd-send">Go</button>
+  </div>
+  <div class="help-text">Direct: click N · type N text · scroll · Natural: "fill out the form"</div>
+  <div id="cmd-result"></div>
+  <div id="ask-container">
+    <div id="ask-question"></div>
+    <input id="ask-input" type="text" placeholder="Type your answer...">
+    <div class="ask-buttons">
+      <button class="ask-btn" id="ask-yes">Yes</button>
+      <button class="ask-btn" id="ask-no">No</button>
+      <button class="ask-btn" id="ask-send">Send</button>
+    </div>
+  </div>
+  <div id="status"></div>
+  <div id="elements"></div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
