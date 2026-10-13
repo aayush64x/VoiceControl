@@ -8,6 +8,10 @@ VOYA is a voice-first browser agent for people who can't easily use a mouse or k
 
 Built at **Hack Midwest 2026** for the AWS challenge, **best use of the Strands Agents SDK**. VOYA runs on a [Strands](https://strandsagents.com) agent with Claude models on **Amazon Bedrock**.
 
+[![Watch the VOYA demo](https://img.youtube.com/vi/9HmIYj1NJBY/maxresdefault.jpg)](https://youtu.be/9HmIYj1NJBY)
+
+**🌐 [Visit the landing page](https://aayush64x.github.io/voya/)**
+
 ---
 
 ## What it looks like
